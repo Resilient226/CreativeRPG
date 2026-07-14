@@ -1,22 +1,29 @@
-// Vercel serverless function: proxies requests to the Anthropic API.
+// Vercel serverless function: proxies requests to Groq's API.
 // The API key lives ONLY here, as a server-side env var. It is never sent to
-// the browser. This is also the fix for the artifact runtime's "Invalid
-// response format" wall — a real backend can make these calls.
+// the browser.
+//
+// IMPORTANT: Groq's response shape is normalized back into an Anthropic-style
+// shape ({ content: [{ type: "text", text }] }) before returning, so
+// src/lib/model.js's allText()/extractJson() and every training file that
+// calls callModel() need ZERO changes. Only this file had to change.
 //
 // POST body: { system?, messages, maxTokens?, useSearch? }
-// Returns:   { data, usedSearch }   (data is the raw Anthropic response)
+// Returns:   { data, usedSearch }
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const MODEL = "claude-sonnet-4-6";
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+// Pick your model — this is a real choice, not swapped automatically.
+// Other options as of writing: "llama-3.1-8b-instant" (faster/cheaper),
+// "mixtral-8x7b-32768" (long context). Check console.groq.com for the current list.
+const MODEL = "llama-3.3-70b-versatile";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: { message: "Method not allowed" } });
     return;
   }
-  const key = process.env.ANTHROPIC_API_KEY;
+  const key = process.env.GROQ_API_KEY;
   if (!key) {
-    res.status(500).json({ error: { message: "ANTHROPIC_API_KEY is not set on the server" } });
+    res.status(500).json({ error: { message: "GROQ_API_KEY is not set on the server" } });
     return;
   }
 
@@ -30,40 +37,42 @@ export default async function handler(req, res) {
     return;
   }
 
-  const base = { model: MODEL, max_tokens: maxTokens, messages };
-  if (system) base.system = system;
+  // Groq's chat-completions format puts the system prompt as a message,
+  // not a separate top-level field like Anthropic does.
+  const groqMessages = system ? [{ role: "system", content: system }, ...messages] : messages;
 
-  // Try with web search first (if requested); on any API error, retry without tools.
-  const attempts = [];
-  if (useSearch) {
-    attempts.push({
-      body: { ...base, tools: [{ type: "web_search_20250305", name: "web_search" }] },
-      usedSearch: true,
+  // NOTE: Groq does not offer Anthropic's built-in web_search tool. If a caller
+  // asks for useSearch, we can't honor it here — we proceed without it and say
+  // so, rather than silently pretending search happened. Real web search would
+  // need a separate implementation (e.g. calling a search API yourself and
+  // stuffing results into the prompt) — that's not built here.
+  const reqBody = { model: MODEL, max_tokens: maxTokens, messages: groqMessages };
+
+  try {
+    const r = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`,
+      },
+      body: JSON.stringify(reqBody),
     });
-  }
-  attempts.push({ body: base, usedSearch: false });
+    const raw = await r.json();
 
-  let lastErr = "Request failed";
-  for (const attempt of attempts) {
-    try {
-      const r = await fetch(ANTHROPIC_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify(attempt.body),
-      });
-      const data = await r.json();
-      if (data && data.error) { lastErr = data.error.message || "API error"; continue; }
-      if (!data || !Array.isArray(data.content)) { lastErr = "Malformed API response"; continue; }
-      res.status(200).json({ data, usedSearch: attempt.usedSearch });
+    if (raw && raw.error) {
+      res.status(502).json({ error: { message: raw.error.message || "Groq API error" } });
       return;
-    } catch (e) {
-      lastErr = (e && e.message) || "Network error";
-      continue;
     }
+    const text = raw?.choices?.[0]?.message?.content;
+    if (typeof text !== "string") {
+      res.status(502).json({ error: { message: "Malformed response from Groq" } });
+      return;
+    }
+
+    // Normalize to the same shape the rest of the app already expects.
+    const data = { content: [{ type: "text", text }] };
+    res.status(200).json({ data, usedSearch: false });
+  } catch (e) {
+    res.status(502).json({ error: { message: (e && e.message) || "Network error" } });
   }
-  res.status(502).json({ error: { message: lastErr } });
 }
