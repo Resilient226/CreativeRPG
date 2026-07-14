@@ -79,40 +79,66 @@ const OPPORTUNITY_FEEDS = [
   { label: "The Bakery Atlanta — full opportunity list", url: "https://www.thebakeryatlanta.com/artist-opportunities" },
   { label: "Burnaway — monthly Call for Artists roundup", url: "https://burnaway.org/daily/call-for-artists/" },
 ];
-const SKILLS = [
-  { k: "mastery", label: "Mastery", level: 12, xp: 2450, need: 3000, color: T.purple },
-  { k: "negotiation", label: "Negotiation", level: 9, xp: 1820, need: 2400, color: T.gold },
-  { k: "charisma", label: "Charisma", level: 10, xp: 2100, need: 2600, color: T.blue },
-  { k: "business", label: "Business Acumen", level: 8, xp: 1560, need: 2200, color: T.green },
-  { k: "resilience", label: "Resilience", level: 11, xp: 2890, need: 3100, color: T.rose },
-  { k: "confidence", label: "Confidence", level: 6, xp: 980, need: 1800, color: T.gold },
-  { k: "prestige", label: "Prestige", level: 5, xp: 620, need: 1600, color: T.purple },
+const SKILL_TEMPLATE = [
+  { k: "mastery", label: "Mastery", color: T.purple },
+  { k: "negotiation", label: "Negotiation", color: T.gold },
+  { k: "charisma", label: "Charisma", color: T.blue },
+  { k: "business", label: "Business Acumen", color: T.green },
+  { k: "resilience", label: "Resilience", color: T.rose },
+  { k: "confidence", label: "Confidence", color: T.gold },
+  { k: "prestige", label: "Prestige", color: T.purple },
 ];
+// Starting skill levels from what you told onboarding: picked strengths start higher,
+// picked weaknesses start lower, everything else starts at a neutral baseline.
+function computeSkills({ strengths = [], weaknesses = [] }) {
+  return SKILL_TEMPLATE.map(s => {
+    const need = 80 + 40 * (strengths.includes(s.k) ? 3 : weaknesses.includes(s.k) ? 1 : 2);
+    const level = strengths.includes(s.k) ? 3 : weaknesses.includes(s.k) ? 1 : 2;
+    return { ...s, level, xp: 0, need };
+  });
+}
 /* Universal Levels — a career rank everyone climbs the same way, earned by evidence not app-usage.
    Level = permanent, never regresses. XP = progress within the current level toward the next.
    Requirements are category-based (Mastery/Business/Networking/Professionalism) so different
    disciplines (mural artist, gallery painter, illustrator) can all reach the same level differently. */
-const LEVELS = [
-  { n: 1, title: "The Beginner", sub: "You've started making work.", state: "done" },
-  { n: 2, title: "The Creator", sub: "A consistent practice exists.", state: "done" },
-  { n: 3, title: "The Finisher", sub: "You complete what you start.", state: "done" },
-  { n: 4, title: "The Seller", sub: "People buy from you.", state: "current",
-    xp: 1450, xpNeed: 2000,
-    categories: [
-      { name: "Mastery", met: 4, total: 5 },
-      { name: "Business", met: 3, total: 5 },
-      { name: "Networking", met: 2, total: 5 },
-      { name: "Professionalism", met: 2, total: 3 },
-    ] },
-  { n: 5, title: "The Networker", sub: "Relationships become assets.", state: "locked" },
-  { n: 6, title: "The Professional", sub: "You run this like a business.", state: "locked" },
-  { n: 7, title: "The Gallery Artist", sub: "Become gallery ready.", state: "locked" },
-  { n: 8, title: "The Brand", sub: "People remember you.", state: "locked" },
-  { n: 9, title: "The Collector's Choice", sub: "Collectors seek you out.", state: "locked" },
-  { n: 10, title: "The Studio Owner", sub: "You're running a company.", state: "locked" },
-  { n: 11, title: "The Six-Figure Artist", sub: "You hit the mission.", state: "locked" },
-  { n: 12, title: "The Empire Builder", sub: "You're building culture.", state: "locked" },
+// Universal Levels — the ladder is the same for everyone; only where YOU are on it differs.
+// Titles/order never change per-user. Career Assessment (onboarding) computes done/current/locked + xp.
+const LEVEL_TEMPLATE = [
+  { n: 1, title: "The Beginner", sub: "You've started making work." },
+  { n: 2, title: "The Creator", sub: "A consistent practice exists." },
+  { n: 3, title: "The Finisher", sub: "You complete what you start." },
+  { n: 4, title: "The Seller", sub: "People buy from you." },
+  { n: 5, title: "The Networker", sub: "Relationships become assets." },
+  { n: 6, title: "The Professional", sub: "You run this like a business." },
+  { n: 7, title: "The Gallery Artist", sub: "Become gallery ready." },
+  { n: 8, title: "The Brand", sub: "People remember you." },
+  { n: 9, title: "The Collector's Choice", sub: "Collectors seek you out." },
+  { n: 10, title: "The Studio Owner", sub: "You're running a company." },
+  { n: 11, title: "The Six-Figure Artist", sub: "You hit the mission." },
+  { n: 12, title: "The Empire Builder", sub: "You're building culture." },
 ];
+// Rough score-based placement (Career Assessment, self-reported — not auto-verified from
+// imported accounts; that's a separate, bigger capability this doesn't attempt).
+const LEVEL_THRESHOLDS = [0, 5, 15, 30, 50, 75, 110, 150, 200, 260, 330, 420];
+function computeLevels({ finishedWorks, soloShows, groupShows, totalSales }) {
+  const score = (finishedWorks || 0) * 1 + (soloShows || 0) * 8 + (groupShows || 0) * 3 + (totalSales || 0) / 1000;
+  let currentIdx = 0;
+  for (let i = LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
+    if (score >= LEVEL_THRESHOLDS[i]) { currentIdx = i; break; }
+  }
+  return LEVEL_TEMPLATE.map((l, i) => ({
+    ...l,
+    state: i < currentIdx ? "done" : i === currentIdx ? "current" : "locked",
+    xp: i === currentIdx ? 0 : undefined,
+    xpNeed: i === currentIdx ? 2000 : undefined,
+    categories: i === currentIdx ? [
+      { name: "Mastery", met: Math.min(5, Math.round((finishedWorks || 0) / 6)), total: 5 },
+      { name: "Business", met: Math.min(5, Math.round((totalSales || 0) / 3000)), total: 5 },
+      { name: "Networking", met: Math.min(5, groupShows || 0), total: 5 },
+      { name: "Professionalism", met: Math.min(3, soloShows || 0), total: 3 },
+    ] : undefined,
+  }));
+}
 const initialConfidence = { Career: 82, Inventory: 78, Finances: 51, Relationships: 74, Health: 61, Time: 71 };
 const initialQuests = [
   { id: "q1", tier: "primary", title: "Finish Painting #18 (48\" x 60\")",
@@ -348,10 +374,19 @@ export default function CreativeEmpireOS() {
   const [debriefText, setDebriefText] = useState("");
   const [loaded, setLoaded] = useState(false);
 
-  // Load any previous save once, on first mount, from real Firestore — same storage
-  // Training Grounds already uses, so this game and Evelyn's memory live in one place.
+  // onboarded: null = still checking, false = show the onboarding flow, true = show the app.
+  const [onboarded, setOnboarded] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [skills, setSkills] = useState(() => computeSkills({}));
+  const [levels, setLevels] = useState(() => computeLevels({}));
+
+  // First thing on mount: is there a profile? If not, this is a brand-new player —
+  // show onboarding instead of ever loading the demo seed data.
   useEffect(() => {
     (async () => {
+      const savedProfile = await storageGet("profile-v1");
+      if (!savedProfile) { setOnboarded(false); setLoaded(true); return; }
+      setProfile(savedProfile);
       const save = await loadSave();
       if (save) {
         if (save.quests) setQuests(save.quests);
@@ -363,21 +398,83 @@ export default function CreativeEmpireOS() {
         if (save.ideas) setIdeas(save.ideas);
         if (save.opps) setOpps(save.opps);
         if (typeof save.energy === "number") setEnergy(save.energy);
-        flash("Loaded your saved world.");
+        if (save.skills) setSkills(save.skills);
+        if (save.levels) setLevels(save.levels);
+        flash("Welcome back.");
       }
+      setOnboarded(true);
       setLoaded(true);
     })();
   }, []);
 
-  // Save on every meaningful change. Skipped until the initial load above has run, so we
-  // never overwrite a real save with the fresh-seed defaults during the first render.
+  // Save on every meaningful change. Skipped until onboarding + the initial load have
+  // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
-    if (!loaded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy })
+    if (!loaded || !onboarded) return;
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, quests, confidence, goal, contacts, places, events, ideas, opps, energy]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
+
+  // Called once, at the end of onboarding. Replaces every piece of demo/seed data with
+  // something derived from what the player actually told us about their real career.
+  async function finishOnboarding(answers) {
+    const newSkills = computeSkills(answers);
+    const newLevels = computeLevels(answers);
+    const newConfidence = {
+      Career: answers.finishedWorks > 15 ? 70 : 50,
+      Inventory: Math.min(90, 30 + (answers.finishedWorks || 0) * 3),
+      Finances: answers.hasDayJob ? 60 : 40,
+      Relationships: 35,
+      Health: answers.weeklyHours > 25 ? 45 : 65,
+      Time: answers.hasDayJob ? 40 : 70,
+    };
+    const newGoal = { current: 0, target: answers.targetAmount || 100000 };
+    const newQuests = [];
+    if ((answers.finishedWorks || 0) < 20) {
+      newQuests.push({ id: "q-onb-1", tier: "primary", title: "Finish more work",
+        why: `Regional festivals and juried shows typically expect 15–20 finished pieces. You reported ${answers.finishedWorks || 0}.`,
+        ev: "Career progress", effort: "ongoing", unlock: "Festival eligibility", tag: "CAREER", color: T.purple,
+        icon: Palette, due: "ongoing", done: false });
+    }
+    if (answers.weaknesses?.includes("confidence") || answers.weaknesses?.includes("negotiation")) {
+      newQuests.push({ id: "q-onb-2", tier: "secondary", title: "Practice with Evelyn",
+        why: `You flagged ${answers.weaknesses.includes("confidence") ? "confidence" : "negotiation"} as an area to work on — Training Grounds is built for exactly this.`,
+        ev: "Skill XP", effort: "15 min", unlock: "—", tag: "TIME", color: T.blue,
+        icon: Users, due: "ongoing", done: false });
+    }
+    newQuests.push({ id: "q-onb-3", tier: "secondary", title: `Toward: ${answers.missionText || "your goal"}`,
+      why: `Your stated timeline was ${answers.timeline || "no fixed deadline"}. This is here as a standing reminder of why you're doing this.`,
+      ev: "—", effort: "—", unlock: "—", tag: "CAREER", color: T.gold, icon: Sparkles, due: answers.timeline || "—", done: false });
+
+    setProfile(answers);
+    setSkills(newSkills);
+    setLevels(newLevels);
+    setConfidence(newConfidence);
+    setGoal(newGoal);
+    setQuests(newQuests);
+    setContacts([]); // no fake demo contacts — real ones get added as you actually meet people
+    const newPlaces = [
+      { id: "p1", kind: "place", name: "Studio", icon: Palette, color: T.wood, pos: { x: 16, y: 78 },
+        note: `Your practice space. You told onboarding you work on this ${answers.weeklyHours || 0} hrs/week.` },
+      { id: "p2", kind: "place", name: "Inventory", icon: PiggyBank, color: T.wood, pos: { x: 8, y: 50 },
+        note: `${answers.finishedWorks || 0} finished works reported at onboarding.` },
+    ];
+    setPlaces(newPlaces);
+    setEvents([]);
+    setIdeas([]);
+    setEnergy(10);
+
+    await storageSet("profile-v1", answers);
+    await storageSet(SAVE_KEY, {
+      quests: newQuests, confidence: newConfidence, goal: newGoal, contacts: [],
+      places: newPlaces, events: [], ideas: [], opps: initialOpps, energy: 10, skills: newSkills, levels: newLevels,
+    });
+    setOnboarded(true);
+    setLoaded(true);
+    flash("Your world is ready.");
+  }
 
   function toggleQuest(id) {
     setQuests(qs => qs.map(q => {
@@ -566,6 +663,17 @@ export default function CreativeEmpireOS() {
     { id: "ideas-hub", kind: "idea", name: "Ideas", icon: Lightbulb, color: T.gold, pos: { x: 46, y: 40 } },
   ];
 
+  // Nothing else renders until we know whether this is a new player.
+  if (onboarded === null) {
+    return (
+      <div style={{ minHeight: "100vh", background: T.ink, display: "flex", alignItems: "center",
+        justifyContent: "center", color: T.textCream, fontFamily: body }}>Loading your world…</div>
+    );
+  }
+  if (onboarded === false) {
+    return <Onboarding_ onFinish={finishOnboarding} />;
+  }
+
   // Training Grounds and the System check each manage their own full-screen layout —
   // shown here instead of the game's usual chrome, with just a way back.
   if (tab === "traininggrounds") {
@@ -594,7 +702,7 @@ export default function CreativeEmpireOS() {
       `}</style>
       <Toast text={toast} />
 
-      {tab === "home" && <Home_ quests={quests} goal={goal} energy={energy} onToggle={toggleQuest} onViewAll={() => setTab("quests")} />}
+      {tab === "home" && <Home_ quests={quests} goal={goal} energy={energy} onToggle={toggleQuest} onViewAll={() => setTab("quests")} profile={profile} levels={levels} />}
       {tab === "quests" && <Quests_ quests={quests} onToggle={toggleQuest} />}
       {tab === "map" && (
         <MapScreen_
@@ -602,7 +710,7 @@ export default function CreativeEmpireOS() {
           onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)}
         />
       )}
-      {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} />}
+      {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels} />}
 
       {selectedNode && (
         <NodeSheet node={selectedNode} onClose={() => setSelectedNode(null)}
@@ -703,10 +811,11 @@ function NavBtn({ icon: Icon, label, active, onClick }) {
 }
 
 /* ================= HOME (simplified — map lives on its own tab now) ================= */
-function Home_({ quests, goal, energy, onToggle, onViewAll }) {
+function Home_({ quests, goal, energy, onToggle, onViewAll, profile, levels }) {
   const pct = Math.round((goal.current / goal.target) * 100);
   const top3 = quests.filter(q => q.tier !== "ignore").slice(0, 3);
   const primary = quests.find(q => q.tier === "primary");
+  const currentLevel = levels.find(l => l.state === "current") || levels[0];
   return (
     <div>
       <div style={{ display: "flex", gap: 10, padding: "16px 14px 8px" }}>
@@ -715,12 +824,14 @@ function Home_({ quests, goal, energy, onToggle, onViewAll }) {
             border: `3px solid ${T.blue}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🧑🏾‍🎨</div>
           <div style={{ position: "absolute", bottom: -4, right: -4, width: 24, height: 24, borderRadius: "50%",
             background: T.gold, border: `2px solid ${T.ink}`, display: "flex", alignItems: "center", justifyContent: "center",
-            fontFamily: head, fontWeight: 800, fontSize: 10, color: T.ink }}>17</div>
+            fontFamily: head, fontWeight: 800, fontSize: 10, color: T.ink }}>{currentLevel.n}</div>
         </div>
         <WoodPanel style={{ flex: 1, padding: "8px 12px" }}>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 16 }}>Za'Kerrious</div>
-          <div style={{ fontFamily: body, fontSize: 11, color: T.green, fontWeight: 700 }}>Emerging Artist</div>
-          <div style={{ fontFamily: body, fontSize: 10, color: T.textMuted }}>LVL 17 · 2,840 XP to LVL 18</div>
+          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 16 }}>{profile?.name || "Artist"}</div>
+          <div style={{ fontFamily: body, fontSize: 11, color: T.green, fontWeight: 700 }}>{currentLevel.title}</div>
+          <div style={{ fontFamily: body, fontSize: 10, color: T.textMuted }}>
+            Lv {currentLevel.n} · {currentLevel.xp ?? 0}/{currentLevel.xpNeed ?? 2000} XP
+          </div>
         </WoodPanel>
       </div>
 
@@ -1335,7 +1446,7 @@ function Quests_({ quests, onToggle }) {
 }
 
 /* ================= PROFILE ================= */
-function Profile_({ confidence, onQuickAccess }) {
+function Profile_({ confidence, onQuickAccess, skills, levels }) {
   const meta = { Career: Briefcase, Inventory: ImageIcon, Finances: DollarSign, Relationships: Users, Health: Heart, Time: Clock };
   return (
     <div style={{ padding: "18px 14px" }}>
@@ -1356,7 +1467,7 @@ function Profile_({ confidence, onQuickAccess }) {
       </div>
       <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>SKILLS</div>
       <Scroll style={{ padding: 14 }}>
-        {SKILLS.map(s => (
+        {skills.map(s => (
           <div key={s.k} style={{ marginBottom: 11 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 12, fontWeight: 700, marginBottom: 3 }}>
               <span>{s.label}</span><span style={{ color: "#5b4630" }}>Lv.{s.level} · {s.xp}/{s.need}</span>
@@ -1372,7 +1483,7 @@ function Profile_({ confidence, onQuickAccess }) {
         Everyone climbs the same ladder. A level is earned by evidence, not by time spent in the app.
       </div>
       <Scroll style={{ padding: 14 }}>
-        {LEVELS.map((t, i) => (
+        {levels.map((t, i) => (
           <div key={t.n} style={{ display: "flex", gap: 10, opacity: t.state === "locked" ? 0.55 : 1 }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 24 }}>
               <div style={{ width: 22, height: 22, borderRadius: "50%",
@@ -1381,7 +1492,7 @@ function Profile_({ confidence, onQuickAccess }) {
                 {t.state === "done" ? <CheckCircle2 size={13} color="#fff" /> : t.state === "locked" ? <Lock size={11} color={T.textDark} /> :
                   <span style={{ fontFamily: head, fontSize: 10, fontWeight: 800 }}>{t.n}</span>}
               </div>
-              {i < LEVELS.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 18, background: T.wood, opacity: 0.4, marginTop: 2 }} />}
+              {i < levels.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 18, background: T.wood, opacity: 0.4, marginTop: 2 }} />}
             </div>
             <div style={{ paddingBottom: 14, flex: 1 }}>
               <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{t.n}. {t.title}</div>
@@ -1564,5 +1675,147 @@ function SubmitBtn({ onClick, label, disabled }) {
       background: disabled ? "#00000022" : T.gold, color: disabled ? T.textMuted : T.ink, fontFamily: head, fontWeight: 800, fontSize: 14 }}>
       {label}
     </button>
+  );
+}
+
+function MultiChipSelect({ label, options, values, onChange, max }) {
+  const toggle = key => {
+    const has = values.includes(key);
+    if (has) onChange(values.filter(v => v !== key));
+    else if (!max || values.length < max) onChange([...values, key]);
+  };
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.wood, marginBottom: 6 }}>
+        {label} {max && <span style={{ color: T.textMuted, fontWeight: 500 }}>(up to {max})</span>}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {options.map(o => (
+          <button key={o.key} onClick={() => toggle(o.key)} style={{
+            padding: "6px 11px", borderRadius: 20, fontFamily: body, fontSize: 11.5, fontWeight: 700,
+            border: `2px solid ${T.wood}`, background: values.includes(o.key) ? T.gold : "#fffaf0",
+            color: values.includes(o.key) ? T.ink : T.textDark }}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ================= ONBOARDING — "Let's build your world" =================
+   A short, structured interview, not a freeform AI chat — this is the very first
+   thing a player does, and it's exactly the wrong place to risk AI misreading
+   free text. Structured questions are boring but reliable, which matters most here. */
+const SKILL_OPTIONS = SKILL_TEMPLATE.map(s => ({ key: s.k, label: s.label }));
+const TIMELINE_OPTIONS = [
+  { key: "1 year", label: "1 year" }, { key: "3 years", label: "3 years" },
+  { key: "5 years", label: "5 years" }, { key: "10 years", label: "10 years" },
+  { key: "No deadline", label: "No deadline" },
+];
+function Onboarding_({ onFinish }) {
+  const [step, setStep] = useState(0);
+  const [a, setA] = useState({ strengths: [], weaknesses: [] });
+  const set = (k, v) => setA(f => ({ ...f, [k]: v }));
+  const steps = ["Who are you", "Your mission", "Strengths & weaknesses", "Life & time", "Career so far", "Your world"];
+
+  function next() { setStep(s => Math.min(steps.length - 1, s + 1)); }
+  function back() { setStep(s => Math.max(0, s - 1)); }
+
+  const preview = step === steps.length - 1 ? computeLevels(a) : null;
+  const previewLevel = preview ? preview.find(l => l.state === "current") : null;
+
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream,
+      fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "24px 18px 40px" }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
+        * { box-sizing: border-box; } input, textarea, button { font-family: inherit; }`}</style>
+
+      <div style={{ fontFamily: head, fontWeight: 800, fontSize: 22, textAlign: "center" }}>Let's build your world</div>
+      <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", marginTop: 4 }}>
+        Step {step + 1} of {steps.length} · {steps[step]}
+      </div>
+      <div style={{ display: "flex", gap: 4, margin: "14px 0 20px" }}>
+        {steps.map((_, i) => (
+          <div key={i} style={{ flex: 1, height: 4, borderRadius: 2, background: i <= step ? T.gold : "#ffffff22" }} />
+        ))}
+      </div>
+
+      <Scroll style={{ padding: 18 }}>
+        {step === 0 && (
+          <>
+            <FormInput label="Your name" value={a.name} onChange={v => set("name", v)} placeholder="What should the app call you?" />
+            <FormInput label="Your medium / craft" value={a.medium} onChange={v => set("medium", v)} placeholder="e.g. Oil painting, illustration, sculpture…" />
+            <FormInput label="Years creating" value={a.yearsCreating} onChange={v => set("yearsCreating", v)} type="number" placeholder="e.g. 5" />
+          </>
+        )}
+        {step === 1 && (
+          <>
+            <FormInput label="What does success actually look like to you?" value={a.missionText} onChange={v => set("missionText", v)} area
+              placeholder="e.g. I want to quit my day job. I want gallery representation. I want museum shows." />
+            <ChipSelect label="Timeline" options={TIMELINE_OPTIONS} value={a.timeline} onChange={v => set("timeline", v)} />
+            <FormInput label="Target income this period ($)" value={a.targetAmount} onChange={v => set("targetAmount", v)} type="number" placeholder="100000" />
+          </>
+        )}
+        {step === 2 && (
+          <>
+            <MultiChipSelect label="What are you already strong in?" options={SKILL_OPTIONS} values={a.strengths}
+              onChange={v => set("strengths", v)} max={3} />
+            <MultiChipSelect label="What do you struggle with?" options={SKILL_OPTIONS} values={a.weaknesses}
+              onChange={v => set("weaknesses", v)} max={3} />
+            <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>
+              Anything you don't pick starts at a neutral baseline — this just gives the app an honest starting read, not a permanent label.
+            </div>
+          </>
+        )}
+        {step === 3 && (
+          <>
+            <ChipSelect label="Do you currently work a day job?" options={[{ key: "yes", label: "Yes" }, { key: "no", label: "No" }]}
+              value={a.hasDayJob === true ? "yes" : a.hasDayJob === false ? "no" : ""} onChange={v => set("hasDayJob", v === "yes")} />
+            <FormInput label="Realistic hours per week for your art" value={a.weeklyHours} onChange={v => set("weeklyHours", v)} type="number" placeholder="e.g. 15" />
+          </>
+        )}
+        {step === 4 && (
+          <>
+            <FormInput label="Finished works you have right now" value={a.finishedWorks} onChange={v => set("finishedWorks", v)} type="number" placeholder="e.g. 12" />
+            <FormInput label="Solo shows to date" value={a.soloShows} onChange={v => set("soloShows", v)} type="number" placeholder="e.g. 0" />
+            <FormInput label="Group shows to date" value={a.groupShows} onChange={v => set("groupShows", v)} type="number" placeholder="e.g. 2" />
+            <FormInput label="Total career art sales so far ($)" value={a.totalSales} onChange={v => set("totalSales", v)} type="number" placeholder="e.g. 3000" />
+            <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted, marginTop: 4 }}>
+              This is self-reported, not verified against a real portfolio or account — it's here to give you a fair starting point, not to audit you.
+            </div>
+          </>
+        )}
+        {step === 5 && previewLevel && (
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 30 }}>🎉</div>
+            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, marginTop: 6 }}>
+              Based on what you told me, you're starting at
+            </div>
+            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 24, color: T.gold, marginTop: 6 }}>
+              Level {previewLevel.n} — {previewLevel.title}
+            </div>
+            <div style={{ fontFamily: body, fontSize: 13, color: "#5b4630", marginTop: 10, lineHeight: 1.5 }}>
+              This is a rough, self-reported estimate — not an audit of your career. It'll get more accurate as you actually play.
+              {a.finishedWorks < 20 && " I've already queued a quest around finishing more work, since most opportunities expect 15–20 pieces."}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          {step > 0 && (
+            <button onClick={back} style={{ flex: 1, padding: 13, borderRadius: 11, border: `2px solid ${T.wood}`,
+              background: "transparent", color: T.textDark, fontFamily: head, fontWeight: 700, fontSize: 13 }}>Back</button>
+          )}
+          {step < steps.length - 1 ? (
+            <button onClick={next} style={{ flex: 2, padding: 13, borderRadius: 11, border: "none",
+              background: T.gold, color: T.ink, fontFamily: head, fontWeight: 800, fontSize: 14 }}>Continue</button>
+          ) : (
+            <button onClick={() => onFinish(a)} style={{ flex: 2, padding: 13, borderRadius: 11, border: "none",
+              background: T.green, color: "#fff", fontFamily: head, fontWeight: 800, fontSize: 14 }}>Enter your world →</button>
+          )}
+        </div>
+      </Scroll>
+    </div>
   );
 }
