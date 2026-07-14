@@ -10,15 +10,24 @@
 // hierarchical keys like "art-inventory" and "chat-history" (hyphens, safe).
 // If you introduce ":" keys, they're fine; slashes are not — encode if needed.
 
-import { db, ensureUser } from "./firebase";
+import { db, auth } from "./firebase";
 import {
   doc, getDoc, setDoc, deleteDoc, collection, getDocs, query, where,
 } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 
-let uidPromise = null;
+// Resolves to whoever is CURRENTLY signed in — checked fresh every call, never cached
+// permanently. This matters: if someone signs out and a different person signs in on
+// the same page (no full reload), a cached uid would silently leak the first person's
+// data to the second. auth.currentUser is kept live by Firebase, so this is cheap.
 function uid() {
-  if (!uidPromise) uidPromise = ensureUser();
-  return uidPromise;
+  if (auth.currentUser) return Promise.resolve(auth.currentUser.uid);
+  // Only hit this path in the brief window before Firebase restores a persisted session.
+  return new Promise((resolve, reject) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) { unsub(); resolve(user.uid); }
+    }, reject);
+  });
 }
 
 function kvDoc(userId, key) {
