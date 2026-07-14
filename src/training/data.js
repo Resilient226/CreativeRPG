@@ -1,18 +1,25 @@
 // Firestore persistence for Training Grounds.
 // Collections (all under the signed-in user): skills, npcs, interactions, memoryLogs.
 
-import { db, ensureUser } from "../lib/firebase";
+import { db, auth } from "../lib/firebase";
 import {
   doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs,
   query, orderBy, limit as fsLimit, serverTimestamp,
 } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 import { freshSkills } from "./skills";
 import { EVELYN_SEED } from "./evelyn";
 
-let uidPromise = null;
+// Resolves to whoever is CURRENTLY signed in — never cached permanently, so this
+// stays correct even if someone signs out and a different person signs in on the
+// same page. Same fix applied in ../lib/storage.js.
 function uid() {
-  if (!uidPromise) uidPromise = ensureUser();
-  return uidPromise;
+  if (auth.currentUser) return Promise.resolve(auth.currentUser.uid);
+  return new Promise((resolve, reject) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (user) { unsub(); resolve(user.uid); }
+    }, reject);
+  });
 }
 const base = async () => ["users", await uid()];
 
