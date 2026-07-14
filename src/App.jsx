@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { storageGet, storageSet } from "./lib/storage";
+import { onAuthChange, signUpEmail, signInEmail, signInGoogle, signOutUser, authErrorMessage } from "./lib/firebase";
 import { callModel, allText, extractJson } from "./lib/model";
 import TrainingGrounds from "./training/TrainingGrounds";
 import {
@@ -362,6 +363,8 @@ export default function CreativeEmpireOS() {
   const [ideas, setIdeas] = useState(initialIdeas);
   const [opps, setOpps] = useState(initialOpps);
   const [energy, setEnergy] = useState(10);
+  const [inventory, setInventory] = useState([]);
+  const [financeLog, setFinanceLog] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -379,10 +382,21 @@ export default function CreativeEmpireOS() {
   const [profile, setProfile] = useState(null);
   const [skills, setSkills] = useState(() => computeSkills({}));
   const [levels, setLevels] = useState(() => computeLevels({}));
+  const [authUser, setAuthUser] = useState(undefined); // undefined = still checking, null = signed out, object = signed in
 
-  // First thing on mount: is there a profile? If not, this is a brand-new player —
-  // show onboarding instead of ever loading the demo seed data.
+  // Subscribe to real auth state — fires on sign-in, sign-out, and switching accounts.
   useEffect(() => {
+    const unsub = onAuthChange((user) => setAuthUser(user || null));
+    return unsub;
+  }, []);
+
+  // Whenever the signed-in user actually changes (fresh sign-in, or a different account
+  // after a sign-out), reset local state and re-check profile/save for THAT account —
+  // so one browser can't leak a previous person's world into a new sign-in.
+  useEffect(() => {
+    if (!authUser) return;
+    setOnboarded(null);
+    setLoaded(false);
     (async () => {
       const savedProfile = await storageGet("profile-v1");
       if (!savedProfile) { setOnboarded(false); setLoaded(true); return; }
@@ -400,20 +414,22 @@ export default function CreativeEmpireOS() {
         if (typeof save.energy === "number") setEnergy(save.energy);
         if (save.skills) setSkills(save.skills);
         if (save.levels) setLevels(save.levels);
+        if (save.inventory) setInventory(save.inventory);
+        if (save.financeLog) setFinanceLog(save.financeLog);
         flash("Welcome back.");
       }
       setOnboarded(true);
       setLoaded(true);
     })();
-  }, []);
+  }, [authUser]);
 
   // Save on every meaningful change. Skipped until onboarding + the initial load have
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
 
@@ -466,10 +482,13 @@ export default function CreativeEmpireOS() {
     setIdeas([]);
     setEnergy(10);
 
+    setInventory([]);
+    setFinanceLog([]);
     await storageSet("profile-v1", answers);
     await storageSet(SAVE_KEY, {
       quests: newQuests, confidence: newConfidence, goal: newGoal, contacts: [],
       places: newPlaces, events: [], ideas: [], opps: initialOpps, energy: 10, skills: newSkills, levels: newLevels,
+      inventory: [], financeLog: [],
     });
     setOnboarded(true);
     setLoaded(true);
@@ -580,6 +599,10 @@ export default function CreativeEmpireOS() {
   function onQuickAccess(label) {
     if (label === "Training") { setTab("traininggrounds"); return; }
     if (label === "System") { setTab("system"); return; }
+    if (label === "Inventory") { setTab("inventory"); return; }
+    if (label === "Calendar") { setTab("calendar"); return; }
+    if (label === "Finances") { setTab("finances"); return; }
+    if (label === "Opportunities") { setTab("opportunities"); return; }
     flash(`${label} isn't built yet.`);
   }
 
@@ -663,6 +686,18 @@ export default function CreativeEmpireOS() {
     { id: "ideas-hub", kind: "idea", name: "Ideas", icon: Lightbulb, color: T.gold, pos: { x: 46, y: 40 } },
   ];
 
+  // Auth gate comes first: nothing about the game or onboarding matters until we
+  // know who (if anyone) is actually signed in.
+  if (authUser === undefined) {
+    return (
+      <div style={{ minHeight: "100vh", background: T.ink, display: "flex", alignItems: "center",
+        justifyContent: "center", color: T.textCream, fontFamily: body }}>Checking sign-in…</div>
+    );
+  }
+  if (authUser === null) {
+    return <Login_ />;
+  }
+
   // Nothing else renders until we know whether this is a new player.
   if (onboarded === null) {
     return (
@@ -689,6 +724,18 @@ export default function CreativeEmpireOS() {
   }
   if (tab === "system") {
     return <SystemCheck onBack={() => setTab("profile")} />;
+  }
+  if (tab === "inventory") {
+    return <Inventory_ inventory={inventory} setInventory={setInventory} onBack={() => setTab("profile")} flash={flash} />;
+  }
+  if (tab === "calendar") {
+    return <Calendar_ quests={quests} events={events} onBack={() => setTab("profile")} />;
+  }
+  if (tab === "finances") {
+    return <Finances_ financeLog={financeLog} setFinanceLog={setFinanceLog} goal={goal} setGoal={setGoal} onBack={() => setTab("profile")} flash={flash} />;
+  }
+  if (tab === "opportunities") {
+    return <OpportunitiesPage_ opps={opps} onAccept={trackOpportunity} onDecline={dismissOpportunity} onBack={() => setTab("profile")} />;
   }
 
   return (
@@ -798,6 +845,187 @@ function SystemCheck({ onBack }) {
           {err && <p style={{ color: "#F0567A", marginTop: 10 }}>✗ {err}</p>}
         </div>
       </div>
+    </div>
+  );
+}
+/* ================= INVENTORY (real, working) ================= */
+function Inventory_({ inventory, setInventory, onBack, flash }) {
+  const [form, setForm] = useState({ name: "", size: "", price: "", status: "in-progress" });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  function add() {
+    if (!form.name.trim()) return;
+    setInventory(inv => [...inv, { id: "art-" + Date.now(), name: form.name, size: form.size, price: form.price, status: form.status }]);
+    setForm({ name: "", size: "", price: "", status: "in-progress" });
+    flash("Added to inventory.");
+  }
+  function remove(id) { setInventory(inv => inv.filter(a => a.id !== id)); }
+  function toggleStatus(id) {
+    setInventory(inv => inv.map(a => a.id === id ? { ...a, status: a.status === "finished" ? "in-progress" : "finished" } : a));
+  }
+  const finished = inventory.filter(a => a.status === "finished").length;
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream, fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "16px 14px 40px" }}>
+      <BackHeader title="🖼️ Inventory" onBack={onBack} />
+      <Scroll style={{ padding: 14, marginTop: 12 }}>
+        <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{finished} finished · {inventory.length - finished} in progress</div>
+        <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630" }}>Regional festivals typically expect 15–20 finished pieces.</div>
+      </Scroll>
+      <div style={{ margin: "16px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>ADD A PIECE</div>
+      <Scroll style={{ padding: 14 }}>
+        <FormInput label="Name" value={form.name} onChange={v => set("name", v)} placeholder="e.g. Persistence of Alchemy" />
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1 }}><FormInput label="Size" value={form.size} onChange={v => set("size", v)} placeholder="48x60" /></div>
+          <div style={{ flex: 1 }}><FormInput label="Price" value={form.price} onChange={v => set("price", v)} placeholder="$2,400" /></div>
+        </div>
+        <ChipSelect label="Status" options={[{ key: "in-progress", label: "In Progress" }, { key: "finished", label: "Finished" }]}
+          value={form.status} onChange={v => set("status", v)} />
+        <SubmitBtn onClick={add} label="Add piece" disabled={!form.name.trim()} />
+      </Scroll>
+      <div style={{ margin: "16px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>YOUR WORKS</div>
+      {inventory.length === 0 && <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>Nothing added yet.</div>}
+      {inventory.map(a => (
+        <Scroll key={a.id} style={{ padding: 12, marginBottom: 8, display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={() => toggleStatus(a.id)} style={{ width: 24, height: 24, borderRadius: 6, flexShrink: 0,
+            border: `2px solid ${T.wood}`, background: a.status === "finished" ? T.green : "transparent",
+            display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {a.status === "finished" && <Check size={14} color="#fff" />}
+          </button>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14 }}>{a.name}</div>
+            <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{a.size || "—"} · {a.price || "—"}</div>
+          </div>
+          <button onClick={() => remove(a.id)} style={{ background: "none", border: "none" }}><Trash2 size={16} color={T.rose} /></button>
+        </Scroll>
+      ))}
+    </div>
+  );
+}
+
+/* ================= CALENDAR (upcoming list — not a month grid, see note) ================= */
+function Calendar_({ quests, events, onBack }) {
+  const items = [
+    ...quests.filter(q => !q.done).map(q => ({ label: q.title, sub: q.tag, days: /^\d+/.test(q.due) ? parseInt(q.due, 10) : null, raw: q.due })),
+    ...events.filter(e => e.daysLeft != null).map(e => ({ label: e.name, sub: e.category || "Event", days: e.daysLeft, raw: `${e.daysLeft}d` })),
+  ].sort((a, b) => (a.days ?? 9999) - (b.days ?? 9999));
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream, fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "16px 14px 40px" }}>
+      <BackHeader title="📅 Calendar" onBack={onBack} />
+      <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, margin: "10px 2px 14px" }}>
+        Upcoming, soonest first. (A full month grid isn't built yet — this is the honest, useful version for now.)
+      </div>
+      {items.length === 0 && <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>Nothing with a deadline right now.</div>}
+      {items.map((it, i) => (
+        <Scroll key={i} style={{ padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14 }}>{it.label}</div>
+            <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{it.sub}</div>
+          </div>
+          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: it.days != null && it.days <= 5 ? T.rose : T.gold }}>{it.raw}</div>
+        </Scroll>
+      ))}
+    </div>
+  );
+}
+
+/* ================= FINANCES (real income/expense log vs. goal) ================= */
+function Finances_({ financeLog, setFinanceLog, goal, setGoal, onBack, flash }) {
+  const [form, setForm] = useState({ desc: "", amount: "", type: "income" });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const income = financeLog.filter(f => f.type === "income").reduce((s, f) => s + Number(f.amount || 0), 0);
+  const expenses = financeLog.filter(f => f.type === "expense").reduce((s, f) => s + Number(f.amount || 0), 0);
+  function add() {
+    if (!form.desc.trim() || !form.amount) return;
+    const entry = { id: "fin-" + Date.now(), desc: form.desc, amount: Number(form.amount), type: form.type, date: Date.now() };
+    setFinanceLog(l => [entry, ...l]);
+    if (form.type === "income") setGoal(g => ({ ...g, current: g.current + Number(form.amount) }));
+    setForm({ desc: "", amount: "", type: "income" });
+    flash(form.type === "income" ? "Income logged — goal progress updated." : "Expense logged.");
+  }
+  function remove(id) {
+    const entry = financeLog.find(f => f.id === id);
+    if (entry && entry.type === "income") setGoal(g => ({ ...g, current: Math.max(0, g.current - entry.amount) }));
+    setFinanceLog(l => l.filter(f => f.id !== id));
+  }
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream, fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "16px 14px 40px" }}>
+      <BackHeader title="💰 Finances" onBack={onBack} />
+      <Scroll style={{ padding: 14, marginTop: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <div><div style={{ fontFamily: head, fontSize: 9, color: T.wood, fontWeight: 700 }}>INCOME</div>
+            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: T.forestLight }}>${income.toLocaleString()}</div></div>
+          <div><div style={{ fontFamily: head, fontSize: 9, color: T.wood, fontWeight: 700 }}>EXPENSES</div>
+            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: T.rose }}>${expenses.toLocaleString()}</div></div>
+          <div><div style={{ fontFamily: head, fontSize: 9, color: T.wood, fontWeight: 700 }}>TOWARD GOAL</div>
+            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18 }}>${goal.current.toLocaleString()}</div></div>
+        </div>
+        <div style={{ marginTop: 10 }}><Bar pct={(goal.current / goal.target) * 100} color={T.green} track="#00000022" /></div>
+      </Scroll>
+      <div style={{ margin: "16px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>LOG AN ENTRY</div>
+      <Scroll style={{ padding: 14 }}>
+        <ChipSelect label="Type" options={[{ key: "income", label: "Income (a sale)" }, { key: "expense", label: "Expense" }]} value={form.type} onChange={v => set("type", v)} />
+        <FormInput label="What was it?" value={form.desc} onChange={v => set("desc", v)} placeholder="e.g. Sold 'City of Becoming' to Marcus" />
+        <FormInput label="Amount ($)" value={form.amount} onChange={v => set("amount", v)} type="number" placeholder="e.g. 2400" />
+        <SubmitBtn onClick={add} label="Log it" disabled={!form.desc.trim() || !form.amount} />
+        {form.type === "income" && <div style={{ fontFamily: body, fontSize: 10.5, color: "#8a7350", marginTop: 6 }}>Income entries move your Mission progress bar too.</div>}
+      </Scroll>
+      <div style={{ margin: "16px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>HISTORY</div>
+      {financeLog.length === 0 && <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>Nothing logged yet.</div>}
+      {financeLog.map(f => (
+        <Scroll key={f.id} style={{ padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div><div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{f.desc}</div>
+            <div style={{ fontFamily: body, fontSize: 10.5, color: "#5b4630" }}>{timeAgo(f.date)}</div></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: f.type === "income" ? T.forestLight : T.rose }}>
+              {f.type === "income" ? "+" : "−"}${Number(f.amount).toLocaleString()}
+            </span>
+            <button onClick={() => remove(f.id)} style={{ background: "none", border: "none" }}><Trash2 size={14} color={T.rose} /></button>
+          </div>
+        </Scroll>
+      ))}
+    </div>
+  );
+}
+
+/* ================= DEDICATED OPPORTUNITIES PAGE ================= */
+function OpportunitiesPage_({ opps, onAccept, onDecline, onBack }) {
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream, fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "16px 14px 40px" }}>
+      <BackHeader title="🎯 Opportunities" onBack={onBack} />
+      <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, margin: "10px 2px 14px" }}>
+        Everything tracked or worth watching, all in one place.
+      </div>
+      {opps.length === 0 && <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>Nothing tracked right now.</div>}
+      {opps.map(o => (
+        <Scroll key={o.id} style={{ padding: 13, marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14.5, flex: 1 }}>{o.name}</div>
+            <span style={{ fontFamily: head, fontSize: 8.5, padding: "3px 8px", borderRadius: 20, background: T.rose, color: "#fff" }}>{o.tag}</span>
+          </div>
+          <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 5 }}>{o.note}</div>
+          <div style={{ display: "flex", gap: 12, marginTop: 7, fontFamily: body, fontSize: 11, fontWeight: 700 }}>
+            <span style={{ color: T.forestLight }}>{o.budget}</span>
+          </div>
+          <a href={o.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 4,
+            marginTop: 7, fontFamily: body, fontSize: 10.5, color: T.blue, fontWeight: 700, textDecoration: "none" }}>
+            <ChevronRight size={11} /> Source: {o.source} ↗
+          </a>
+          <div style={{ display: "flex", gap: 8, marginTop: 9 }}>
+            <button onClick={() => onAccept(o)} style={{ flex: 1, padding: "8px 0", borderRadius: 9, border: "none",
+              background: T.green, color: "#fff", fontFamily: head, fontWeight: 700, fontSize: 11 }}>Track</button>
+            <button onClick={() => onDecline(o.id)} style={{ flex: 1, padding: "8px 0", borderRadius: 9,
+              border: `2px solid ${T.wood}`, background: "transparent", color: T.textDark, fontFamily: head, fontWeight: 700, fontSize: 11 }}>Not now</button>
+          </div>
+        </Scroll>
+      ))}
+    </div>
+  );
+}
+function BackHeader({ title, onBack }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <button onClick={onBack} style={{ background: "#181C28", border: "1px solid #282D38", borderRadius: 10,
+        padding: "8px 12px", color: "#EDE7D9", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>← Back</button>
+      <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18 }}>{title}</div>
     </div>
   );
 }
@@ -1072,17 +1300,48 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
   );
 }
 function MapBackground() {
+  // Candy Land-style board: a bright winding path of alternating candy-colored
+  // spaces, with lollipops and gumdrops scattered around instead of trees.
+  const spaceColors = ["#FF5B7A", "#FF9F45", "#FFD447", "#7ED957", "#4FC3F7", "#B57EDC"];
+  const spacePts = [];
+  const pathD = "M 40 40 Q 130 90 190 55 T 340 90 Q 300 210 210 250 Q 120 290 70 250 Q 30 180 40 40";
+  // sample points evenly along a smooth loop for the candy spaces (approximate, not exact arc-length)
+  const raw = [[40,40],[80,58],[130,90],[160,72],[190,55],[230,60],[270,75],[310,85],[340,90],
+    [325,140],[300,180],[270,215],[230,240],[190,258],[150,270],[110,262],[75,235],[50,190],[40,120],[40,40]];
+  raw.forEach((p, i) => spacePts.push({ x: p[0], y: p[1], color: spaceColors[i % spaceColors.length] }));
+
   return (
     <svg viewBox="0 0 400 360" width="100%" height="100%" style={{ display: "block", position: "absolute", inset: 0 }}>
-      <defs><linearGradient id="skyg" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stopColor="#9fd6f0" /><stop offset="1" stopColor="#cfe9c9" /></linearGradient></defs>
-      <rect width="400" height="360" fill="url(#skyg)" />
-      <ellipse cx="90" cy="300" rx="240" ry="110" fill="#5c9a55" />
-      <ellipse cx="340" cy="310" rx="200" ry="100" fill="#4f8a49" />
-      <path d="M 60 50 Q 140 100 200 70 T 340 100 Q 300 220 220 260 Q 140 300 90 260 Q 40 190 60 50 Z"
-        fill="none" stroke="#4FA3D1" strokeWidth="14" strokeLinecap="round" opacity="0.85" />
-      {[[40,70,18],[130,50,22],[300,60,16],[365,140,20],[30,220,18],[200,25,14],[360,260,17]].map((t,i)=>(
-        <g key={i} transform={`translate(${t[0]},${t[1]})`}><circle r={t[2]} fill="#3f6b3a" /><circle r={t[2]*0.6} cx={-4} cy={-4} fill="#4f7f49" /></g>
+      <defs>
+        <linearGradient id="candysky" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#FFD9EC" /><stop offset="0.5" stopColor="#D6E9FF" /><stop offset="1" stopColor="#FFF3C4" />
+        </linearGradient>
+      </defs>
+      <rect width="400" height="360" fill="url(#candysky)" />
+
+      {/* the winding candy path, cream road with a soft shadow */}
+      <path d={pathD} fill="none" stroke="#FFF7E8" strokeWidth="22" strokeLinecap="round" opacity="0.95" />
+      <path d={pathD} fill="none" stroke="#F0567A22" strokeWidth="26" strokeLinecap="round" opacity="0.3" />
+
+      {/* alternating candy-colored spaces along the path */}
+      {spacePts.map((p, i) => (
+        <g key={i}>
+          <circle cx={p.x} cy={p.y} r="9" fill={p.color} stroke="#fff" strokeWidth="2" />
+        </g>
+      ))}
+
+      {/* lollipops and gumdrops scattered around, standing in for trees */}
+      {[[35,300,"#FF5B7A"],[100,320,"#4FC3F7"],[340,300,"#FFD447"],[365,230,"#B57EDC"],[20,150,"#7ED957"]].map((t,i)=>(
+        <g key={"lolly"+i} transform={`translate(${t[0]},${t[1]})`}>
+          <line x1="0" y1="0" x2="0" y2="20" stroke="#e8d9b5" strokeWidth="3" strokeLinecap="round" />
+          <circle cx="0" cy="-8" r="13" fill={t[2]} stroke="#fff" strokeWidth="2.5" />
+          <path d={`M -6 -8 A 6 6 0 0 1 6 -8`} fill="none" stroke="#ffffff88" strokeWidth="2" />
+        </g>
+      ))}
+      {[[60,20,"#FF9F45"],[280,335,"#FF5B7A"],[380,60,"#7ED957"]].map((t,i)=>(
+        <g key={"gum"+i} transform={`translate(${t[0]},${t[1]})`}>
+          <path d="M -12 8 A 12 12 0 0 1 12 8 Z" fill={t[2]} stroke="#fff" strokeWidth="2" />
+        </g>
       ))}
     </svg>
   );
@@ -1524,13 +1783,18 @@ function Profile_({ confidence, onQuickAccess, skills, levels }) {
       </Scroll>
       <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>QUICK ACCESS</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-        {[["Inventory", ImageIcon], ["Calendar", Calendar], ["Finances", DollarSign], ["Training", Dumbbell], ["System", Activity]].map(([label, Icon]) => (
+        {[["Inventory", ImageIcon], ["Calendar", Calendar], ["Finances", DollarSign], ["Training", Dumbbell], ["System", Activity], ["Opportunities", Trophy]].map(([label, Icon]) => (
           <button key={label} onClick={() => onQuickAccess(label)} style={{ background: T.panel, border: `2px solid ${T.wood}`,
             borderRadius: 12, padding: "12px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
             <Icon size={16} color={T.gold} /><span style={{ fontFamily: head, fontSize: 10, fontWeight: 700 }}>{label}</span>
           </button>
         ))}
       </div>
+      <button onClick={() => signOutUser().catch(() => {})} style={{ width: "100%", marginTop: 18, padding: 12,
+        borderRadius: 11, border: `2px solid ${T.rose}66`, background: "transparent", color: T.rose,
+        fontFamily: head, fontWeight: 700, fontSize: 13 }}>
+        Sign out
+      </button>
     </div>
   );
 }
@@ -1713,6 +1977,66 @@ const TIMELINE_OPTIONS = [
   { key: "5 years", label: "5 years" }, { key: "10 years", label: "10 years" },
   { key: "No deadline", label: "No deadline" },
 ];
+function Login_() {
+  const [mode, setMode] = useState("signin"); // signin | signup
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function submit() {
+    setBusy(true); setErr("");
+    try {
+      if (mode === "signup") await signUpEmail(email, password);
+      else await signInEmail(email, password);
+      // No further action needed — onAuthChange (subscribed in the main App) picks this
+      // up automatically and moves past this screen.
+    } catch (e) {
+      setErr(authErrorMessage(e));
+    } finally { setBusy(false); }
+  }
+  async function google() {
+    setBusy(true); setErr("");
+    try { await signInGoogle(); } catch (e) { setErr(authErrorMessage(e)); } finally { setBusy(false); }
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream,
+      fontFamily: body, maxWidth: 480, margin: "0 auto", display: "flex", flexDirection: "column",
+      justifyContent: "center", padding: "24px 22px" }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
+        * { box-sizing: border-box; } input, button { font-family: inherit; }`}</style>
+      <div style={{ textAlign: "center", marginBottom: 24 }}>
+        <div style={{ fontFamily: head, fontWeight: 800, fontSize: 26 }}>Creative Empire <span style={{ color: T.gold }}>OS</span></div>
+        <div style={{ fontFamily: body, fontSize: 13, color: T.textMuted, marginTop: 4 }}>
+          {mode === "signup" ? "Create your account to start your world." : "Sign in to your world."}
+        </div>
+      </div>
+      <Scroll style={{ padding: 20 }}>
+        <FormInput label="Email" value={email} onChange={setEmail} placeholder="you@example.com" />
+        <FormInput label="Password" value={password} onChange={setPassword} type="password" placeholder="At least 6 characters" />
+        {err && <div style={{ fontFamily: body, fontSize: 12, color: T.rose, marginBottom: 10 }}>{err}</div>}
+        <SubmitBtn onClick={submit} disabled={busy || !email || !password}
+          label={busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0" }}>
+          <div style={{ flex: 1, height: 1, background: T.wood, opacity: 0.4 }} />
+          <span style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>or</span>
+          <div style={{ flex: 1, height: 1, background: T.wood, opacity: 0.4 }} />
+        </div>
+        <button onClick={google} disabled={busy} style={{ width: "100%", padding: 12, borderRadius: 11,
+          border: `2px solid ${T.wood}`, background: "#fffaf0", color: T.textDark, fontFamily: head,
+          fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          🔵 Continue with Google
+        </button>
+        <button onClick={() => { setMode(m => m === "signup" ? "signin" : "signup"); setErr(""); }}
+          style={{ width: "100%", background: "none", border: "none", marginTop: 16, fontFamily: body,
+            fontSize: 12.5, color: T.textMuted, textDecoration: "underline" }}>
+          {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
+        </button>
+      </Scroll>
+    </div>
+  );
+}
 function Onboarding_({ onFinish }) {
   const [step, setStep] = useState(0);
   const [a, setA] = useState({ strengths: [], weaknesses: [] });
