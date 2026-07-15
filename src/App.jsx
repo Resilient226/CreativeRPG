@@ -1300,8 +1300,13 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
       return;
     }
     if (dragRef.current && tier === "building") {
-      const dx = e.clientX - dragRef.current.startX, dy = e.clientY - dragRef.current.startY;
-      setCamera(c => ({ ...c, x: dragRef.current.camX - dx / c.zoom, y: dragRef.current.camY - dy / c.zoom }));
+      // FIX: capture the drag-start snapshot NOW, as plain values. Reading dragRef.current
+      // a second time from *inside* setCamera's updater (as this used to) is unsafe — that
+      // callback can run after a subsequent fast pointerup has already nulled dragRef.current,
+      // crashing with "null is not an object" (confirmed by the actual production error).
+      const start = dragRef.current;
+      const dx = e.clientX - start.startX, dy = e.clientY - start.startY;
+      setCamera(c => ({ ...c, x: start.camX - dx / c.zoom, y: start.camY - dy / c.zoom }));
     }
   }
   function onPointerUp(e) {
