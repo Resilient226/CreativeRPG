@@ -1223,12 +1223,16 @@ function clampZoom(z) { return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)); }
 
 // Districts have fixed world-space centers (there are only 5 — this is the "universal"
 // layout, like the level ladder; only WHICH entities land in each one changes per player).
+// World coordinates are offset by WORLD_ORIGIN so every district center is a positive
+// number — this lets the world container declare an honest bounding box that actually
+// contains its content (see the fix note on the world div below).
+const WORLD_ORIGIN = 400;
 const DISTRICT_LAYOUT = [
-  { key: "place", label: "Career", color: T.wood, cx: -260, cy: -200 },
-  { key: "person", label: "People", color: T.blue, cx: 260, cy: -200 },
-  { key: "opportunity", label: "Opportunities", color: T.gold, cx: -260, cy: 220 },
-  { key: "milestone", label: "Events", color: T.purple, cx: 260, cy: 220 },
-  { key: "idea", label: "Ideas", color: T.forestLight, cx: 0, cy: 0 },
+  { key: "place", label: "Career", color: T.wood, cx: WORLD_ORIGIN - 260, cy: WORLD_ORIGIN - 200 },
+  { key: "person", label: "People", color: T.blue, cx: WORLD_ORIGIN + 260, cy: WORLD_ORIGIN - 200 },
+  { key: "opportunity", label: "Opportunities", color: T.gold, cx: WORLD_ORIGIN - 260, cy: WORLD_ORIGIN + 220 },
+  { key: "milestone", label: "Events", color: T.purple, cx: WORLD_ORIGIN + 260, cy: WORLD_ORIGIN + 220 },
+  { key: "idea", label: "Ideas", color: T.forestLight, cx: WORLD_ORIGIN, cy: WORLD_ORIGIN },
 ];
 function buildDistricts(nodes) {
   return DISTRICT_LAYOUT.map(d => {
@@ -1244,7 +1248,7 @@ function buildDistricts(nodes) {
 }
 
 function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
-  const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.5 });
+  const [camera, setCamera] = useState({ x: WORLD_ORIGIN, y: WORLD_ORIGIN, zoom: 0.5 });
   const [animating, setAnimating] = useState(false);
   const [interior, setInterior] = useState(null); // the one entity shown in interior view
   const dragRef = useRef(null);
@@ -1261,7 +1265,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
   }
   function zoomOutToDistricts() {
     setInterior(null);
-    flyTo(0, 0, 0.5);
+    flyTo(WORLD_ORIGIN, WORLD_ORIGIN, 0.5);
   }
   function enterDistrict(d) { flyTo(d.cx, d.cy, 1.2); }
   function enterEntity(e) {
@@ -1319,8 +1323,17 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
       <div ref={viewportRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel}
         style={{ position: "absolute", inset: 0, touchAction: "none", cursor: dragRef.current ? "grabbing" : "grab", overflow: "hidden" }}>
-        <div style={{ position: "absolute", left: 0, top: 0, width: 1, height: 1,
-          transform: worldTransform, transformOrigin: "0 0",
+        {/* FIX: this div previously declared itself as 1x1px while its real children rendered
+            hundreds of pixels away in every direction (districts span roughly x:65-735,
+            y:65-735 in world space). That size/content mismatch, combined with a live
+            scale() transform during pinch-zoom, is a known way to make mobile browsers
+            briefly black out while recompositing — the browser's declared layer bounds
+            didn't match what it actually had to paint. Now the box honestly contains its
+            content (world coordinates are pre-shifted into 0-800 range via WORLD_ORIGIN),
+            plus explicit GPU-layer hints as a second line of defense. */}
+        <div style={{ position: "absolute", left: 0, top: 0, width: 800, height: 800,
+          transform: worldTransform, transformOrigin: "0 0", willChange: "transform",
+          backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden",
           transition: animating ? "transform 0.42s cubic-bezier(.2,.8,.2,1)" : "none" }}>
 
           {districts.map(d => {
