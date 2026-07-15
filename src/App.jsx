@@ -4,6 +4,7 @@ import { onAuthChange, signUpEmail, signInEmail, signInGoogle, signOutUser, auth
 import { callModel, allText, extractJson } from "./lib/model";
 import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
+import { buildPersonProfile, applyInteraction, groupPeopleBy, temperamentFlavor, clampStat } from "./engines/relationshipEngine";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
@@ -142,51 +143,10 @@ const SPARE_SPOTS = [{ x: 20, y: 20 }, { x: 78, y: 40 }, { x: 40, y: 74 }, { x: 
 let spotCursor = 0;
 function nextSpot() { const s = SPARE_SPOTS[spotCursor % SPARE_SPOTS.length]; spotCursor++; return s; }
 
-/* Practice partners (SIM) get a flavored profile from their role — same spirit as Evelyn,
-   just templated instead of AI-written, and honestly labeled as such in the UI. */
-const ROLE_FLAVOR = [
-  { match: /collect/i, backstory: "A private collector — buys carefully, tests your price before committing.",
-    need: "Wants to see where your pricing stands before committing to anything.",
-    trust: 25, interest: 45, color: T.purple },
-  { match: /gallery|gatekeep|curat/i, backstory: "A gallery gatekeeper — polite, but your portfolio has to earn the conversation.",
-    need: "Curating a new show — cohesion and consistency matter more than any single piece.",
-    trust: 20, interest: 35, color: T.purple },
-  { match: /mentor|coach|advis/i, backstory: "A mentor figure — direct feedback, genuinely rooting for you.",
-    need: "Wants to see you follow through on what you said you'd finish last time.",
-    trust: 45, interest: 55, color: T.blue },
-  { match: /consult|agent|manager/i, backstory: "A consultant — practical, transactional, moves fast when it's worth it.",
-    need: "Wants concrete numbers before making any introduction on your behalf.",
-    trust: 30, interest: 40, color: T.blue },
-  { match: /press|writer|journal|critic/i, backstory: "A critic — thoughtful, a little guarded, cares about the story behind the work.",
-    need: "Looking for an angle that isn't just 'artist sells paintings.'",
-    trust: 20, interest: 50, color: T.gold },
-  { match: /peer|artist|friend/i, backstory: "A fellow artist — generous with advice, occasionally a bit competitive.",
-    need: "Wants to trade honest feedback, not just compliments.",
-    trust: 40, interest: 45, color: T.forestLight },
-];
-function roleFlavor(role) {
-  const hit = ROLE_FLAVOR.find(r => r.match.test(role || ""));
-  return hit || { backstory: "Someone you're building a practice relationship with.",
-    need: "Getting to know you — no strong opinion yet either way.", trust: 30, interest: 40, color: T.blue };
-}
-/* Temperament — a second, independent dial. Role sets the domain (what they do);
-   temperament sets the personality (how they act). Combined, they produce a real profile. */
-const TEMPERAMENTS = [
-  { key: "warm", label: "Warm & Encouraging", trustDelta: +12, interestDelta: +8,
-    tone: "They're genuinely warm — quick to encourage, slower to push back." },
-  { key: "shrewd", label: "Shrewd & Guarded", trustDelta: -10, interestDelta: +5,
-    tone: "Shrewd and guarded — they'll test your price and your resolve before warming up." },
-  { key: "blunt", label: "Blunt & Direct", trustDelta: 0, interestDelta: 0,
-    tone: "Blunt and direct — no small talk, they'll tell you exactly what they think." },
-  { key: "anxious", label: "Anxious & Indecisive", trustDelta: -5, interestDelta: -10,
-    tone: "A little anxious and indecisive — prone to second-guessing, needs patience." },
-  { key: "charming", label: "Charming & Evasive", trustDelta: +5, interestDelta: +15,
-    tone: "Charming and hard to pin down — easy to talk to, harder to get a real commitment from." },
-  { key: "skeptical", label: "Skeptical", trustDelta: -15, interestDelta: -5,
-    tone: "Skeptical by default — you'll have to earn every bit of their confidence." },
-];
-function temperamentFlavor(key) { return TEMPERAMENTS.find(t => t.key === key) || null; }
-function clamp0to99(n) { return Math.max(5, Math.min(95, n)); }
+// ROLE_FLAVOR, TEMPERAMENTS, roleFlavor, temperamentFlavor, clampStat, buildPersonProfile,
+// applyInteraction, and groupPeopleBy now live in ./engines/relationshipEngine.js — the
+// second engine extracted per THE_CREATIVE_ARCHITECTURE_SPEC.md §3. This file only
+// renders what that module computes; it doesn't compute the profile itself anymore.
 
 /* Categories for places and events — drive icon/color and give the map real visual variety. */
 const PLACE_CATEGORIES = [
@@ -478,7 +438,7 @@ export default function CreativeEmpireOS() {
   function capKey(tag) { return { CAREER: "Career", RELATIONSHIPS: "Relationships", FINANCES: "Finances", TIME: "Time" }[tag] || "Career"; }
 
   function logInteraction(id) {
-    setContacts(cs => cs.map(c => c.id === id ? { ...c, trust: Math.min(100, c.trust + 4), momentum: "rising", lastInteraction: "just now" } : c));
+    setContacts(cs => cs.map(c => c.id === id ? { ...c, ...applyInteraction(c) } : c));
     flash("Logged the interaction — trust is climbing.");
     setSelectedNode(null);
   }
@@ -529,7 +489,7 @@ export default function CreativeEmpireOS() {
     if (node.kind === "person") {
       setContacts(cs => cs.map(c => c.id !== node.id ? c : {
         ...c, name: editForm.name, type: editForm.role || c.type,
-        trust: clamp0to99(Number(editForm.trust)), interest: clamp0to99(Number(editForm.interest)),
+        trust: clampStat(Number(editForm.trust)), interest: clampStat(Number(editForm.interest)),
         temperament: editForm.temperament ? (temperamentFlavor(editForm.temperament)?.label || editForm.temperament) : c.temperament,
         metContext: editForm.met || "", connections: (editForm.connections || "").split(",").map(s => s.trim()).filter(Boolean),
         needs: editForm.note || c.needs, detailsLog: newEntry ? [...(c.detailsLog || []), newEntry] : (c.detailsLog || []),
@@ -608,16 +568,12 @@ export default function CreativeEmpireOS() {
     const pos = nextSpot();
     if (addMode === "person") {
       if (!addForm.name) return;
-      const flavor = roleFlavor(addForm.role);
-      const temper = temperamentFlavor(addForm.temperament);
-      const trust = clamp0to99(flavor.trust + (temper ? temper.trustDelta : 0));
-      const interest = clamp0to99(flavor.interest + (temper ? temper.interestDelta : 0));
-      const backstory = temper ? `${flavor.backstory} ${temper.tone}` : flavor.backstory;
+      const profile = buildPersonProfile({ role: addForm.role, temperament: addForm.temperament, note: addForm.note });
       setContacts(cs => [...cs, { id: "person-" + Date.now(), kind: "person", name: addForm.name,
-        type: addForm.role || "Practice partner", icon: User, color: flavor.color,
-        trust, interest, momentum: "steady", lastInteraction: "just added",
-        needs: addForm.note ? addForm.note : flavor.need, backstory,
-        temperament: temper ? temper.label : null,
+        type: addForm.role || "Practice partner", icon: User, color: T[profile.colorKey],
+        trust: profile.trust, interest: profile.interest, momentum: "steady", lastInteraction: "just added",
+        needs: profile.needs, backstory: profile.backstory,
+        temperament: profile.temperamentLabel,
         detailsLog: addForm.details ? [{ id: "d-" + Date.now(), text: addForm.details, date: Date.now() }] : [],
         metContext: addForm.met || "", connections: (addForm.connections || "").split(",").map(s => s.trim()).filter(Boolean),
         sim: true, pos }]);
@@ -1138,17 +1094,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
 
   // Group people by met-context or by connections. Simple text matching — not real AI reasoning,
   // just a grouping the app can do consistently while you decide if it's useful.
-  function groupPeople(mode) {
-    const groups = {};
-    peopleOnly.forEach(p => {
-      let key;
-      if (mode === "met") key = p.metContext && p.metContext.trim() ? p.metContext.trim() : "Where met not recorded";
-      else key = (p.connections && p.connections.length > 0) ? p.connections[0] : "No recorded connections";
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(p);
-    });
-    return Object.entries(groups);
-  }
+  // grouping logic now lives in ./engines/relationshipEngine.js (groupPeopleBy)
 
   return (
     <div>
@@ -1227,7 +1173,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
 
       {filter === "person" && organizeBy !== "map" ? (
         <div style={{ margin: "12px 14px 0" }}>
-          {groupPeople(organizeBy).map(([groupName, people]) => (
+          {groupPeopleBy(peopleOnly, organizeBy).map(([groupName, people]) => (
             <div key={groupName} style={{ marginBottom: 14 }}>
               <div style={{ fontFamily: head, fontWeight: 700, fontSize: 12.5, color: T.goldBright, marginBottom: 6 }}>
                 {organizeBy === "met" ? "📍" : "🔗"} {groupName}
