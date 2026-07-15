@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { storageGet, storageSet } from "./lib/storage";
 import { onAuthChange, signUpEmail, signInEmail, signInGoogle, signOutUser, authErrorMessage } from "./lib/firebase";
 import { callModel, allText, extractJson } from "./lib/model";
 import TrainingGrounds from "./training/TrainingGrounds";
+import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
@@ -103,43 +104,9 @@ function computeSkills({ strengths = [], weaknesses = [] }) {
    Requirements are category-based (Mastery/Business/Networking/Professionalism) so different
    disciplines (mural artist, gallery painter, illustrator) can all reach the same level differently. */
 // Universal Levels — the ladder is the same for everyone; only where YOU are on it differs.
-// Titles/order never change per-user. Career Assessment (onboarding) computes done/current/locked + xp.
-const LEVEL_TEMPLATE = [
-  { n: 1, title: "The Beginner", sub: "You've started making work." },
-  { n: 2, title: "The Creator", sub: "A consistent practice exists." },
-  { n: 3, title: "The Finisher", sub: "You complete what you start." },
-  { n: 4, title: "The Seller", sub: "People buy from you." },
-  { n: 5, title: "The Networker", sub: "Relationships become assets." },
-  { n: 6, title: "The Professional", sub: "You run this like a business." },
-  { n: 7, title: "The Gallery Artist", sub: "Become gallery ready." },
-  { n: 8, title: "The Brand", sub: "People remember you." },
-  { n: 9, title: "The Collector's Choice", sub: "Collectors seek you out." },
-  { n: 10, title: "The Studio Owner", sub: "You're running a company." },
-  { n: 11, title: "The Six-Figure Artist", sub: "You hit the mission." },
-  { n: 12, title: "The Empire Builder", sub: "You're building culture." },
-];
-// Rough score-based placement (Career Assessment, self-reported — not auto-verified from
-// imported accounts; that's a separate, bigger capability this doesn't attempt).
-const LEVEL_THRESHOLDS = [0, 5, 15, 30, 50, 75, 110, 150, 200, 260, 330, 420];
-function computeLevels({ finishedWorks, soloShows, groupShows, totalSales }) {
-  const score = (finishedWorks || 0) * 1 + (soloShows || 0) * 8 + (groupShows || 0) * 3 + (totalSales || 0) / 1000;
-  let currentIdx = 0;
-  for (let i = LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
-    if (score >= LEVEL_THRESHOLDS[i]) { currentIdx = i; break; }
-  }
-  return LEVEL_TEMPLATE.map((l, i) => ({
-    ...l,
-    state: i < currentIdx ? "done" : i === currentIdx ? "current" : "locked",
-    xp: i === currentIdx ? 0 : undefined,
-    xpNeed: i === currentIdx ? 2000 : undefined,
-    categories: i === currentIdx ? [
-      { name: "Mastery", met: Math.min(5, Math.round((finishedWorks || 0) / 6)), total: 5 },
-      { name: "Business", met: Math.min(5, Math.round((totalSales || 0) / 3000)), total: 5 },
-      { name: "Networking", met: Math.min(5, groupShows || 0), total: 5 },
-      { name: "Professionalism", met: Math.min(3, soloShows || 0), total: 3 },
-    ] : undefined,
-  }));
-}
+// LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, and computeCategoryProgress
+// now live in ./engines/blueprintEngine.js — the first engine extracted per
+// THE_CREATIVE_ARCHITECTURE_SPEC.md §3. This file only renders what that module computes.
 const initialConfidence = { Career: 82, Inventory: 78, Finances: 51, Relationships: 74, Health: 61, Time: 71 };
 const initialQuests = [
   { id: "q1", tier: "primary", title: "Finish Painting #18 (48\" x 60\")",
@@ -1166,8 +1133,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
     ...events.filter(e => e.daysLeft != null).map(e => ({ label: e.name, days: e.daysLeft })),
   ].sort((a, b) => a.days - b.days).slice(0, 2);
 
-  const urgentEvent = events.find(e => e.requirements && e.daysLeft != null && e.daysLeft <= 10 &&
-    e.requirements.filter(r => r.met).length / e.requirements.length < 0.75);
+  const urgentEvent = events.find(e => e.requirements && isAtRisk(e.requirements, e.daysLeft));
   const lowEnergy = energy <= 3;
 
   // Group people by met-context or by connections. Simple text matching — not real AI reasoning,
@@ -1211,16 +1177,19 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
 
       {(urgentEvent || lowEnergy) && (
         <div style={{ margin: "8px 14px 0", display: "flex", flexDirection: "column", gap: 6 }}>
-          {urgentEvent && (
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#5a1c14", border: `2px solid ${T.rose}`,
-              borderRadius: 12, padding: "9px 11px" }}>
-              <AlertTriangle size={16} color="#ffb4a8" style={{ flexShrink: 0, marginTop: 1 }} />
-              <div style={{ fontFamily: body, fontSize: 11.5, color: "#ffe2dc", lineHeight: 1.4 }}>
-                <b>Consider pivoting:</b> at this pace you may miss <b>{urgentEvent.name}</b> ({urgentEvent.daysLeft} days left,
-                only {urgentEvent.requirements.filter(r => r.met).length}/{urgentEvent.requirements.length} requirements met).
+          {urgentEvent && (() => {
+            const { met, total } = computeReadiness(urgentEvent.requirements);
+            return (
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#5a1c14", border: `2px solid ${T.rose}`,
+                borderRadius: 12, padding: "9px 11px" }}>
+                <AlertTriangle size={16} color="#ffb4a8" style={{ flexShrink: 0, marginTop: 1 }} />
+                <div style={{ fontFamily: body, fontSize: 11.5, color: "#ffe2dc", lineHeight: 1.4 }}>
+                  <b>Consider pivoting:</b> at this pace you may miss <b>{urgentEvent.name}</b> ({urgentEvent.daysLeft} days left,
+                  only {met}/{total} requirements met).
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           {lowEnergy && (
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#3a2a10", border: `2px solid ${T.gold}`,
               borderRadius: 12, padding: "9px 11px" }}>
@@ -1285,17 +1254,221 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
           )}
         </div>
       ) : (
-        <div style={{ margin: "10px 14px 0", borderRadius: 18, overflow: "hidden", border: `3px solid ${T.wood}`,
-          position: "relative", height: 360 }}>
-          <MapBackground />
-          {visible.map(n => (
-            <MapNodePin key={n.id} node={n} onClick={() => n.kind === "idea" ? onShowIdeas() : onSelect(n)} />
-          ))}
-          <div style={{ position: "absolute", bottom: 8, left: "50%", transform: "translateX(-50%)",
-            background: T.ink, border: `2px solid ${T.gold}`, borderRadius: 20, padding: "3px 12px",
-            fontFamily: head, fontSize: 10, fontWeight: 700, color: T.goldBright }}>YOU ARE HERE</div>
+        <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} />
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   WORLD ENGINE — a real camera (x, y, zoom), not a fixed image.
+   Districts are COMPUTED from actual game state (grouped by kind),
+   never hand-placed art. Three LOD tiers driven purely by zoom level:
+     zoom < 0.7          → Districts (colored regions, aggregate counts)
+     0.7 <= zoom < 1.9   → Buildings/NPCs (individual entities, clickable)
+     zoom >= 1.9 + focus → Interior (one entity's full scene, inline)
+   Deliberate scope: DOM + CSS transforms, not canvas/WebGL — the right
+   choice for tens-to-low-hundreds of entities, not thousands. "Infinite"
+   pan means no hard boundary is enforced, not that content exists forever.
+   ================================================================ */
+const ZOOM_MIN = 0.35, ZOOM_MAX = 3.2;
+const LOD_DISTRICT = 0.7, LOD_INTERIOR = 1.9;
+function clampZoom(z) { return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)); }
+
+// Districts have fixed world-space centers (there are only 5 — this is the "universal"
+// layout, like the level ladder; only WHICH entities land in each one changes per player).
+const DISTRICT_LAYOUT = [
+  { key: "place", label: "Career", color: T.wood, cx: -260, cy: -200 },
+  { key: "person", label: "People", color: T.blue, cx: 260, cy: -200 },
+  { key: "opportunity", label: "Opportunities", color: T.gold, cx: -260, cy: 220 },
+  { key: "milestone", label: "Events", color: T.purple, cx: 260, cy: 220 },
+  { key: "idea", label: "Ideas", color: T.forestLight, cx: 0, cy: 0 },
+];
+function buildDistricts(nodes) {
+  return DISTRICT_LAYOUT.map(d => {
+    const entities = nodes.filter(n => n.kind === d.key);
+    const n = Math.max(entities.length, 1);
+    const withPos = entities.map((e, i) => {
+      const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const radius = entities.length <= 1 ? 0 : 70;
+      return { ...e, worldX: d.cx + Math.cos(angle) * radius, worldY: d.cy + Math.sin(angle) * radius };
+    });
+    return { ...d, entities: withPos };
+  });
+}
+
+function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
+  const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.5 });
+  const [animating, setAnimating] = useState(false);
+  const [interior, setInterior] = useState(null); // the one entity shown in interior view
+  const dragRef = useRef(null);
+  const pinchRef = useRef(null); // { id0, id1, startDist, startZoom }
+  const activePointers = useRef(new Map());
+  const viewportRef = useRef(null);
+
+  const districts = useMemo(() => buildDistricts(nodes), [nodes]);
+
+  function flyTo(x, y, zoom) {
+    setAnimating(true);
+    setCamera({ x, y, zoom: clampZoom(zoom) });
+    setTimeout(() => setAnimating(false), 420);
+  }
+  function zoomOutToDistricts() {
+    setInterior(null);
+    flyTo(0, 0, 0.5);
+  }
+  function enterDistrict(d) { flyTo(d.cx, d.cy, 1.2); }
+  function enterEntity(e) {
+    if (e.kind === "idea") { onShowIdeas(); return; }
+    flyTo(e.worldX, e.worldY, LOD_INTERIOR + 0.3);
+    setInterior(e);
+  }
+
+  // Pointer-based drag-to-pan (mouse or single touch) — 1:1, never CSS-transitioned.
+  function onPointerDown(e) {
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.current.size === 1) {
+      dragRef.current = { startX: e.clientX, startY: e.clientY, camX: camera.x, camY: camera.y };
+    } else if (activePointers.current.size === 2) {
+      const pts = [...activePointers.current.values()];
+      pinchRef.current = { startDist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), startZoom: camera.zoom };
+      dragRef.current = null;
+    }
+  }
+  function onPointerMove(e) {
+    if (!activePointers.current.has(e.pointerId)) return;
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointers.current.size === 2 && pinchRef.current) {
+      const pts = [...activePointers.current.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const nz = clampZoom(pinchRef.current.startZoom * (dist / pinchRef.current.startDist));
+      setCamera(c => ({ ...c, zoom: nz }));
+      return;
+    }
+    if (dragRef.current) {
+      const dx = e.clientX - dragRef.current.startX, dy = e.clientY - dragRef.current.startY;
+      setCamera(c => ({ ...c, x: dragRef.current.camX - dx / c.zoom, y: dragRef.current.camY - dy / c.zoom }));
+    }
+  }
+  function onPointerUp(e) {
+    activePointers.current.delete(e.pointerId);
+    if (activePointers.current.size < 2) pinchRef.current = null;
+    if (activePointers.current.size === 0) dragRef.current = null;
+  }
+  function onWheel(e) {
+    e.preventDefault();
+    setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * (e.deltaY < 0 ? 1.15 : 0.87)) }));
+  }
+
+  const tier = interior ? "interior" : camera.zoom < LOD_DISTRICT ? "district" : "building";
+  const rect = viewportRef.current?.getBoundingClientRect();
+  const vw = rect?.width || 400, vh = rect?.height || 360;
+  const worldTransform = `translate(${vw / 2 - camera.x * camera.zoom}px, ${vh / 2 - camera.y * camera.zoom}px) scale(${camera.zoom})`;
+
+  return (
+    <div style={{ margin: "10px 14px 0", borderRadius: 18, overflow: "hidden", border: `3px solid ${T.wood}`,
+      position: "relative", height: 380, background: "linear-gradient(180deg,#1a2a44,#0d1420)" }}>
+
+      {/* the pan/zoom viewport */}
+      <div ref={viewportRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel}
+        style={{ position: "absolute", inset: 0, touchAction: "none", cursor: dragRef.current ? "grabbing" : "grab", overflow: "hidden" }}>
+        <div style={{ position: "absolute", left: 0, top: 0, width: 1, height: 1,
+          transform: worldTransform, transformOrigin: "0 0",
+          transition: animating ? "transform 0.42s cubic-bezier(.2,.8,.2,1)" : "none" }}>
+
+          {districts.map(d => {
+            const districtVisible = tier === "district";
+            return (
+              <div key={d.key}>
+                {districtVisible && (
+                  <button onClick={() => enterDistrict(d)} style={{ position: "absolute", left: d.cx, top: d.cy,
+                    transform: "translate(-50%,-50%)", width: 150, height: 150, borderRadius: "50%",
+                    background: `${d.color}33`, border: `3px solid ${d.color}`, display: "flex",
+                    flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                    <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15, color: "#fff" }}>{d.label}</div>
+                    <div style={{ fontFamily: mono_body(), fontSize: 11, color: "#ffffffcc" }}>{d.entities.length} {d.entities.length === 1 ? "item" : "items"}</div>
+                  </button>
+                )}
+                {tier === "building" && d.entities.map(e => (
+                  <EntityPin key={e.id} entity={e} onClick={() => enterEntity(e)} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* interior takeover — a real third tier, not just the same detail sheet */}
+      {tier === "interior" && interior && (
+        <InteriorScene entity={interior} onExit={() => { setInterior(null); flyTo(interior.worldX, interior.worldY, 1.2); }}
+          onOpenFull={() => onSelect(interior)} />
+      )}
+
+      {/* zoom controls — reliable fallback alongside wheel/pinch, esp. on mobile */}
+      {tier !== "interior" && (
+        <div style={{ position: "absolute", right: 10, bottom: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+          <button onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * 1.3) }))}
+            style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 16 }}>+</button>
+          <button onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * 0.77) }))}
+            style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 16 }}>−</button>
+          {tier !== "district" && (
+            <button onClick={zoomOutToDistricts}
+              style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 13 }}>⌂</button>
+          )}
         </div>
       )}
+
+      <div style={{ position: "absolute", top: 8, left: 10, background: "#00000088", border: "1px solid #ffffff22",
+        borderRadius: 8, padding: "3px 9px", fontFamily: head, fontSize: 9.5, fontWeight: 700, color: "#fff" }}>
+        {tier === "district" ? "DISTRICT VIEW" : tier === "building" ? "BUILDING VIEW" : "INTERIOR"}
+      </div>
+    </div>
+  );
+}
+function mono_body() { return "'JetBrains Mono', monospace"; }
+function EntityPin({ entity, onClick }) {
+  const Icon = entity.icon;
+  return (
+    <button onClick={onClick} style={{ position: "absolute", left: entity.worldX, top: entity.worldY,
+      transform: "translate(-50%,-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+      <div style={{ position: "relative", width: 40, height: 40, borderRadius: "50%", background: "#fffaf0",
+        border: `2.5px solid ${entity.color}`, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 8px #0008" }}>
+        <Icon size={17} color={entity.color} />
+        {entity.sim && <span style={{ position: "absolute", top: -5, right: -5, background: T.purple, color: "#fff",
+          fontFamily: head, fontSize: 6.5, fontWeight: 800, borderRadius: 5, padding: "1px 3px" }}>SIM</span>}
+      </div>
+      <div style={{ background: "#00000099", borderRadius: 6, padding: "2px 6px", maxWidth: 80 }}>
+        <div style={{ fontFamily: head, fontWeight: 700, fontSize: 8, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entity.name}</div>
+      </div>
+    </button>
+  );
+}
+// The third LOD tier: an inline scene, not a modal — this is what "zoomed all the way in" means.
+function InteriorScene({ entity, onExit, onOpenFull }) {
+  const Icon = entity.icon;
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,#241a10,#100b06)",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center" }}>
+      <div style={{ width: 74, height: 74, borderRadius: "50%", background: "#fffaf0", border: `3px solid ${entity.color}`,
+        display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+        <Icon size={30} color={entity.color} />
+      </div>
+      <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: "#fff" }}>{entity.name}</div>
+      <div style={{ fontFamily: mono_body(), fontSize: 11, color: "#ffffff99", marginTop: 3 }}>
+        {entity.kind === "person" ? entity.type : entity.kind === "milestone" ? "Milestone event" : entity.kind === "opportunity" ? entity.tag : "Place"}
+      </div>
+      {(entity.needs || entity.note) && (
+        <div style={{ marginTop: 12, maxWidth: 260, fontFamily: "'Nunito',sans-serif", fontSize: 13, color: "#ffffffcc", lineHeight: 1.5 }}>
+          {entity.needs || entity.note}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+        <button onClick={onOpenFull} style={{ padding: "10px 16px", borderRadius: 10, border: "none",
+          background: T.gold, color: T.ink, fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>Open full details</button>
+        <button onClick={onExit} style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #ffffff44",
+          background: "transparent", color: "#fff", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>Step back out</button>
+      </div>
     </div>
   );
 }
@@ -1373,6 +1546,7 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
   const Icon = node.icon;
   const editable = node.kind === "person" || node.kind === "place" || node.kind === "milestone";
   const deletable = editable;
+  const readiness = node.requirements ? computeReadiness(node.requirements) : null;
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000c0", zIndex: 95, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480 }}>
@@ -1488,15 +1662,15 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
                       <div style={{ fontFamily: body, fontSize: 10, color: "#5b4630" }}>How ready you are for this specific target</div>
                     </div>
                     <div style={{ fontFamily: head, fontWeight: 800, fontSize: 22,
-                      color: (node.requirements.filter(r => r.met).length / node.requirements.length) >= 0.75 ? T.green : T.gold }}>
-                      {Math.round(node.requirements.filter(r => r.met).length / node.requirements.length * 100)}%
+                      color: readiness.pct >= 75 ? T.green : T.gold }}>
+                      {readiness.pct}%
                     </div>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontFamily: head, fontSize: 11, fontWeight: 700, marginBottom: 5 }}>
                     <span>REQUIREMENTS</span>
-                    <span>{node.requirements.filter(r => r.met).length}/{node.requirements.length}</span>
+                    <span>{readiness.met}/{readiness.total}</span>
                   </div>
-                  <Bar pct={(node.requirements.filter(r => r.met).length / node.requirements.length) * 100} color={T.green} track="#00000022" />
+                  <Bar pct={readiness.pct} color={T.green} track="#00000022" />
                   <div style={{ marginTop: 10 }}>
                     {node.requirements.map((r, i) => (
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: i ? `1px solid ${T.wood}22` : "none" }}>
@@ -1763,12 +1937,12 @@ function Profile_({ confidence, onQuickAccess, skills, levels }) {
                   </div>
                   <Bar pct={(t.xp / t.xpNeed) * 100} color={T.gold} track="#00000022" />
                   <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 6 }}>
-                    {t.categories.map(c => (
+                    {computeCategoryProgress(t.categories).categories.map(c => (
                       <div key={c.name}>
                         <div style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 10.5, fontWeight: 700 }}>
                           <span>{c.name}</span><span>{c.met}/{c.total}</span>
                         </div>
-                        <Bar pct={(c.met / c.total) * 100} color={c.met >= c.total ? T.green : T.wood} track="#00000018" h={5} />
+                        <Bar pct={c.pct} color={c.complete ? T.green : T.wood} track="#00000018" h={5} />
                       </div>
                     ))}
                   </div>
