@@ -6,6 +6,8 @@ import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
 import { buildPersonProfile, applyInteraction, groupPeopleBy, temperamentFlavor, clampStat } from "./engines/relationshipEngine";
 import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, computeWorldTransform, WORLD_ORIGIN, DISTRICT_LAYOUT } from "./engines/mapEngine";
+import { buildUpcomingDeadlines, isUrgentDeadline } from "./engines/calendarEngine";
+import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
@@ -827,10 +829,7 @@ function Inventory_({ inventory, setInventory, onBack, flash }) {
 
 /* ================= CALENDAR (upcoming list — not a month grid, see note) ================= */
 function Calendar_({ quests, events, onBack }) {
-  const items = [
-    ...quests.filter(q => !q.done).map(q => ({ label: q.title, sub: q.tag, days: /^\d+/.test(q.due) ? parseInt(q.due, 10) : null, raw: q.due })),
-    ...events.filter(e => e.daysLeft != null).map(e => ({ label: e.name, sub: e.category || "Event", days: e.daysLeft, raw: `${e.daysLeft}d` })),
-  ].sort((a, b) => (a.days ?? 9999) - (b.days ?? 9999));
+  const items = buildUpcomingDeadlines({ quests, events });
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream, fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "16px 14px 40px" }}>
       <BackHeader title="📅 Calendar" onBack={onBack} />
@@ -844,7 +843,7 @@ function Calendar_({ quests, events, onBack }) {
             <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14 }}>{it.label}</div>
             <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{it.sub}</div>
           </div>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: it.days != null && it.days <= 5 ? T.rose : T.gold }}>{it.raw}</div>
+          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: isUrgentDeadline(it.days) ? T.rose : T.gold }}>{it.raw}</div>
         </Scroll>
       ))}
     </div>
@@ -855,19 +854,18 @@ function Calendar_({ quests, events, onBack }) {
 function Finances_({ financeLog, setFinanceLog, goal, setGoal, onBack, flash }) {
   const [form, setForm] = useState({ desc: "", amount: "", type: "income" });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const income = financeLog.filter(f => f.type === "income").reduce((s, f) => s + Number(f.amount || 0), 0);
-  const expenses = financeLog.filter(f => f.type === "expense").reduce((s, f) => s + Number(f.amount || 0), 0);
+  const { income, expenses } = computeFinanceTotals(financeLog);
   function add() {
     if (!form.desc.trim() || !form.amount) return;
-    const entry = { id: "fin-" + Date.now(), desc: form.desc, amount: Number(form.amount), type: form.type, date: Date.now() };
+    const entry = { id: "fin-" + Date.now(), date: Date.now(), ...buildFinanceEntry(form) };
     setFinanceLog(l => [entry, ...l]);
-    if (form.type === "income") setGoal(g => ({ ...g, current: g.current + Number(form.amount) }));
+    if (entry.type === "income") setGoal(g => applyIncomeToGoal(g, entry.amount));
     setForm({ desc: "", amount: "", type: "income" });
-    flash(form.type === "income" ? "Income logged — goal progress updated." : "Expense logged.");
+    flash(entry.type === "income" ? "Income logged — goal progress updated." : "Expense logged.");
   }
   function remove(id) {
     const entry = financeLog.find(f => f.id === id);
-    if (entry && entry.type === "income") setGoal(g => ({ ...g, current: Math.max(0, g.current - entry.amount) }));
+    if (entry && entry.type === "income") setGoal(g => removeIncomeFromGoal(g, entry.amount));
     setFinanceLog(l => l.filter(f => f.id !== id));
   }
   return (
@@ -1085,10 +1083,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
   const visible = nodes.filter(n => filter === "all" || n.kind === filter || (filter === "idea" && n.kind === "idea"));
   const peopleOnly = nodes.filter(n => n.kind === "person");
 
-  const deadlineItems = [
-    ...quests.filter(q => !q.done && /^\d+/.test(q.due)).map(q => ({ label: q.title, days: parseInt(q.due, 10) })),
-    ...events.filter(e => e.daysLeft != null).map(e => ({ label: e.name, days: e.daysLeft })),
-  ].sort((a, b) => a.days - b.days).slice(0, 2);
+  const deadlineItems = buildUpcomingDeadlines({ quests, events, limit: 2 });
 
   const urgentEvent = events.find(e => e.requirements && isAtRisk(e.requirements, e.daysLeft));
   const lowEnergy = energy <= 3;
@@ -1116,7 +1111,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
           {deadlineItems.map((d, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 11, fontWeight: 700, marginTop: 2 }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>{d.label}</span>
-              <span style={{ color: d.days <= 5 ? T.rose : T.textDark }}>{d.days}d</span>
+              <span style={{ color: isUrgentDeadline(d.days) ? T.rose : T.textDark }}>{d.days != null ? `${d.days}d` : d.raw}</span>
             </div>
           ))}
         </Scroll>
