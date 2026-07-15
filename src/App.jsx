@@ -5,6 +5,7 @@ import { callModel, allText, extractJson } from "./lib/model";
 import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
 import { buildPersonProfile, applyInteraction, groupPeopleBy, temperamentFlavor, clampStat } from "./engines/relationshipEngine";
+import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, computeWorldTransform, WORLD_ORIGIN, DISTRICT_LAYOUT } from "./engines/mapEngine";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
@@ -1217,38 +1218,12 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
    choice for tens-to-low-hundreds of entities, not thousands. "Infinite"
    pan means no hard boundary is enforced, not that content exists forever.
    ================================================================ */
-const ZOOM_MIN = 0.35, ZOOM_MAX = 3.2;
-const LOD_DISTRICT = 0.7, LOD_INTERIOR = 1.9;
-function clampZoom(z) {
-  if (!Number.isFinite(z)) return 1; // guards against NaN/Infinity (e.g. a zero-distance pinch start)
-  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
-}
+// ZOOM_MIN/MAX, LOD_DISTRICT/INTERIOR, clampZoom, WORLD_ORIGIN, DISTRICT_LAYOUT,
+// buildDistricts, and computeWorldTransform now live in ./engines/mapEngine.js —
+// the third engine extracted per THE_CREATIVE_ARCHITECTURE_SPEC.md §3. Camera state
+// (useState, pointer handlers, refs) legitimately stays in this component — only the
+// pure district/entity/LOD math moved out.
 
-// Districts have fixed world-space centers (there are only 5 — this is the "universal"
-// layout, like the level ladder; only WHICH entities land in each one changes per player).
-// World coordinates are offset by WORLD_ORIGIN so every district center is a positive
-// number — this lets the world container declare an honest bounding box that actually
-// contains its content (see the fix note on the world div below).
-const WORLD_ORIGIN = 400;
-const DISTRICT_LAYOUT = [
-  { key: "place", label: "Career", color: T.wood, cx: WORLD_ORIGIN - 260, cy: WORLD_ORIGIN - 200 },
-  { key: "person", label: "People", color: T.blue, cx: WORLD_ORIGIN + 260, cy: WORLD_ORIGIN - 200 },
-  { key: "opportunity", label: "Opportunities", color: T.gold, cx: WORLD_ORIGIN - 260, cy: WORLD_ORIGIN + 220 },
-  { key: "milestone", label: "Events", color: T.purple, cx: WORLD_ORIGIN + 260, cy: WORLD_ORIGIN + 220 },
-  { key: "idea", label: "Ideas", color: T.forestLight, cx: WORLD_ORIGIN, cy: WORLD_ORIGIN },
-];
-function buildDistricts(nodes) {
-  return DISTRICT_LAYOUT.map(d => {
-    const entities = nodes.filter(n => n.kind === d.key);
-    const n = Math.max(entities.length, 1);
-    const withPos = entities.map((e, i) => {
-      const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
-      const radius = entities.length <= 1 ? 0 : 70;
-      return { ...e, worldX: d.cx + Math.cos(angle) * radius, worldY: d.cy + Math.sin(angle) * radius };
-    });
-    return { ...d, entities: withPos };
-  });
-}
 
 function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
   const [camera, setCamera] = useState({ x: WORLD_ORIGIN, y: WORLD_ORIGIN, zoom: 0.5 });
@@ -1319,18 +1294,13 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
     setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * (e.deltaY < 0 ? 1.15 : 0.87)) }));
   }
 
-  const tier = interior ? "interior" : camera.zoom < LOD_DISTRICT ? "district" : "building";
+  const tier = computeTier(camera.zoom, interior);
   const rect = viewportRef.current?.getBoundingClientRect();
   const vw = rect?.width || 400, vh = rect?.height || 360;
-  // FIX: District tier is meant to be "the overview" — always centered on the whole
-  // world, never a crop of wherever you'd last panned to. Previously, zooming out
-  // only changed zoom (never position), so panning away and then pinching out could
-  // leave several districts scrolled off-screen entirely, as seen in testing.
-  // District tier now always renders centered on WORLD_ORIGIN; real pan position
-  // only applies once you're zoomed into Building tier.
-  const effX = tier === "district" ? WORLD_ORIGIN : camera.x;
-  const effY = tier === "district" ? WORLD_ORIGIN : camera.y;
-  const worldTransform = `translate(${vw / 2 - effX * camera.zoom}px, ${vh / 2 - effY * camera.zoom}px) scale(${camera.zoom})`;
+  // District tier always renders centered on WORLD_ORIGIN (computeWorldTransform's job) —
+  // this is the fix for "zooming out showed only 2 of 5 districts," now living in the
+  // engine and covered by its own regression test rather than inline logic here.
+  const worldTransform = computeWorldTransform({ camera, vw, vh, tier });
 
   return (
     <div style={{ margin: "10px 14px 0", borderRadius: 18, overflow: "hidden", border: `3px solid ${T.wood}`,
@@ -1355,12 +1325,13 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
 
           {districts.map(d => {
             const districtVisible = tier === "district";
+            const dColor = T[d.colorKey];
             return (
               <div key={d.key}>
                 {districtVisible && (
                   <button onClick={() => enterDistrict(d)} style={{ position: "absolute", left: d.cx, top: d.cy,
                     transform: "translate(-50%,-50%)", width: 150, height: 150, borderRadius: "50%",
-                    background: `${d.color}33`, border: `3px solid ${d.color}`, display: "flex",
+                    background: `${dColor}33`, border: `3px solid ${dColor}`, display: "flex",
                     flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
                     <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15, color: "#fff" }}>{d.label}</div>
                     <div style={{ fontFamily: mono_body(), fontSize: 11, color: "#ffffffcc" }}>{d.entities.length} {d.entities.length === 1 ? "item" : "items"}</div>
