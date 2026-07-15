@@ -1219,7 +1219,10 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
    ================================================================ */
 const ZOOM_MIN = 0.35, ZOOM_MAX = 3.2;
 const LOD_DISTRICT = 0.7, LOD_INTERIOR = 1.9;
-function clampZoom(z) { return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)); }
+function clampZoom(z) {
+  if (!Number.isFinite(z)) return 1; // guards against NaN/Infinity (e.g. a zero-distance pinch start)
+  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+}
 
 // Districts have fixed world-space centers (there are only 5 — this is the "universal"
 // layout, like the level ladder; only WHICH entities land in each one changes per player).
@@ -1281,7 +1284,8 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
       dragRef.current = { startX: e.clientX, startY: e.clientY, camX: camera.x, camY: camera.y };
     } else if (activePointers.current.size === 2) {
       const pts = [...activePointers.current.values()];
-      pinchRef.current = { startDist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), startZoom: camera.zoom };
+      const startDist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)); // never 0 — avoids a divide-by-zero
+      pinchRef.current = { startDist, startZoom: camera.zoom };
       dragRef.current = null;
     }
   }
@@ -1295,7 +1299,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
       setCamera(c => ({ ...c, zoom: nz }));
       return;
     }
-    if (dragRef.current) {
+    if (dragRef.current && tier === "building") {
       const dx = e.clientX - dragRef.current.startX, dy = e.clientY - dragRef.current.startY;
       setCamera(c => ({ ...c, x: dragRef.current.camX - dx / c.zoom, y: dragRef.current.camY - dy / c.zoom }));
     }
@@ -1313,7 +1317,15 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
   const tier = interior ? "interior" : camera.zoom < LOD_DISTRICT ? "district" : "building";
   const rect = viewportRef.current?.getBoundingClientRect();
   const vw = rect?.width || 400, vh = rect?.height || 360;
-  const worldTransform = `translate(${vw / 2 - camera.x * camera.zoom}px, ${vh / 2 - camera.y * camera.zoom}px) scale(${camera.zoom})`;
+  // FIX: District tier is meant to be "the overview" — always centered on the whole
+  // world, never a crop of wherever you'd last panned to. Previously, zooming out
+  // only changed zoom (never position), so panning away and then pinching out could
+  // leave several districts scrolled off-screen entirely, as seen in testing.
+  // District tier now always renders centered on WORLD_ORIGIN; real pan position
+  // only applies once you're zoomed into Building tier.
+  const effX = tier === "district" ? WORLD_ORIGIN : camera.x;
+  const effY = tier === "district" ? WORLD_ORIGIN : camera.y;
+  const worldTransform = `translate(${vw / 2 - effX * camera.zoom}px, ${vh / 2 - effY * camera.zoom}px) scale(${camera.zoom})`;
 
   return (
     <div style={{ margin: "10px 14px 0", borderRadius: 18, overflow: "hidden", border: `3px solid ${T.wood}`,
@@ -1387,7 +1399,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
 }
 function mono_body() { return "'JetBrains Mono', monospace"; }
 function EntityPin({ entity, onClick }) {
-  const Icon = entity.icon;
+  const Icon = entity.icon || PinIcon; // never crash the whole app over one missing icon reference
   return (
     <button onClick={onClick} style={{ position: "absolute", left: entity.worldX, top: entity.worldY,
       transform: "translate(-50%,-50%)", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
@@ -1405,7 +1417,7 @@ function EntityPin({ entity, onClick }) {
 }
 // The third LOD tier: an inline scene, not a modal — this is what "zoomed all the way in" means.
 function InteriorScene({ entity, onExit, onOpenFull }) {
-  const Icon = entity.icon;
+  const Icon = entity.icon || PinIcon;
   return (
     <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,#241a10,#100b06)",
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center" }}>
