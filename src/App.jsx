@@ -8,6 +8,7 @@ import { buildPersonProfile, applyInteraction, groupPeopleBy, temperamentFlavor,
 import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, computeWorldTransform, WORLD_ORIGIN, DISTRICT_LAYOUT } from "./engines/mapEngine";
 import { buildUpcomingDeadlines, isUrgentDeadline } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
+import { runCareerDirector } from "./engines/careerDirector";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
@@ -111,6 +112,15 @@ function computeSkills({ strengths = [], weaknesses = [] }) {
 // LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, and computeCategoryProgress
 // now live in ./engines/blueprintEngine.js — the first engine extracted per
 // THE_CREATIVE_ARCHITECTURE_SPEC.md §3. This file only renders what that module computes.
+// Maps a generated quest's tag to real display fields — the engine only knows tags
+// (plain strings), never icon components or T's colors, same dependency boundary
+// as every other engine here.
+const QUEST_TAG_META = {
+  CAREER: { icon: Palette, color: T.purple },
+  RELATIONSHIPS: { icon: Users, color: T.blue },
+  FINANCES: { icon: DollarSign, color: T.green },
+  TIME: { icon: Clock, color: T.gold },
+};
 const initialConfidence = { Career: 82, Inventory: 78, Finances: 51, Relationships: 74, Health: 61, Time: 71 };
 const initialQuests = [
   { id: "q1", tier: "primary", title: "Finish Painting #18 (48\" x 60\")",
@@ -360,6 +370,35 @@ export default function CreativeEmpireOS() {
     storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
   }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog]);
+
+  // Career Director: reads across the other engines and decides what the Command
+  // Board should show — re-scoring existing quests and proposing new ones from real
+  // gaps (careerDirector.js). Deliberately does NOT depend on `quests` itself — it
+  // reads the latest quests inside the merge, but shouldn't re-run just because a
+  // quest was toggled done, only when the underlying situation actually changes.
+  useEffect(() => {
+    if (!loaded || !onboarded) return;
+    const directed = runCareerDirector({ quests, levels, events, contacts, confidence });
+    setQuests(prev => {
+      const byId = new Map(prev.map(q => [q.id, q]));
+      let changed = false;
+      directed.forEach(dq => {
+        const existing = byId.get(dq.id);
+        if (existing) {
+          if (existing.tier !== dq.tier || existing.reasoning !== dq.reasoning) {
+            byId.set(dq.id, { ...existing, tier: dq.tier, reasoning: dq.reasoning });
+            changed = true;
+          }
+        } else {
+          const meta = QUEST_TAG_META[dq.tag] || QUEST_TAG_META.CAREER;
+          byId.set(dq.id, { ...dq, done: false, icon: meta.icon, color: meta.color, ev: "Progress", unlock: "—" });
+          changed = true;
+        }
+      });
+      return changed ? Array.from(byId.values()) : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, onboarded, levels, events, contacts, confidence]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
 
@@ -1794,7 +1833,7 @@ function Quests_({ quests, onToggle }) {
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={16} color={q.color} /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{q.title}</div>
-                      <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 3 }}>{q.why}</div>
+                      <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 3 }}>{q.reasoning || q.why}</div>
                       <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                         <span style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: q.color }}>{q.tag}</span>
                         <span style={{ fontFamily: body, fontSize: 10, color: T.wood, fontWeight: 700 }}>REWARD: {q.ev}</span>
