@@ -319,7 +319,16 @@ export default function CreativeEmpireOS() {
   const [inventory, setInventory] = useState([]);
   const [financeLog, setFinanceLog] = useState([]);
   const [trainingNpc, setTrainingNpc] = useState(null);
+  const [lastOpportunityFetch, setLastOpportunityFetch] = useState(0);
   const [aiNpcMode, setAiNpcMode] = useState(false);
+  // AI NPC Mode acts like a genuinely separate world: generated people/businesses are
+  // never deleted when the mode is off (toggling back on restores them exactly as
+  // they were, since the underlying contacts/places state is untouched), but nothing
+  // in the app sees or reacts to them while it's off — the Map won't show them,
+  // Career Director won't generate quests about them, nothing treats them as real
+  // until the mode is on again.
+  const visibleContacts = aiNpcMode ? contacts : contacts.filter(c => !c.generatedByAiMode);
+  const visiblePlaces = aiNpcMode ? places : places.filter(p => !p.generatedByAiMode);
   const [homeBase, setHomeBase] = useState(DEFAULT_HOME_BASE);
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -372,6 +381,7 @@ export default function CreativeEmpireOS() {
         if (save.inventory) setInventory(save.inventory);
         if (save.financeLog) setFinanceLog(save.financeLog);
         if (typeof save.aiNpcMode === "boolean") setAiNpcMode(save.aiNpcMode);
+        if (typeof save.lastOpportunityFetch === "number") setLastOpportunityFetch(save.lastOpportunityFetch);
         // Lazy catch-up for practice partners: drift their career state by however
         // much real time passed since last visit — deterministic, so this never
         // reshuffles a personality, only advances it. Real contacts are untouched;
@@ -387,6 +397,29 @@ export default function CreativeEmpireOS() {
         }
         flash("Welcome back.");
       }
+
+      // Daily lazy catch-up for real opportunities — same pattern as everything
+      // else here (Evelyn's drift, NPC career drift): checked once per app open,
+      // not a continuously-running job. A server-side proxy is required because
+      // RSS feeds generally don't send CORS headers a browser could fetch directly.
+      const lastFetch = save?.lastOpportunityFetch || 0;
+      if (Date.now() - lastFetch > 20 * 60 * 60 * 1000) {
+        try {
+          const res = await fetch("/api/fetch-opportunities");
+          const data = await res.json();
+          if (data?.opportunities?.length) {
+            setOpps(prev => {
+              const existingIds = new Set(prev.map(o => o.id));
+              const fresh = data.opportunities.filter(o => !existingIds.has(o.id))
+                .map(o => ({ ...o, tag: o.category, note: o.description, budget: o.cost, sourceUrl: "", source: "ArtsATL" }));
+              if (fresh.length) flash(`${fresh.length} new real opportunit${fresh.length === 1 ? "y" : "ies"} found.`);
+              return [...prev, ...fresh];
+            });
+          }
+          setLastOpportunityFetch(Date.now());
+        } catch { /* network hiccup — the game still works, just skips today's fetch */ }
+      }
+
       setOnboarded(true);
       setLoaded(true);
     })();
@@ -416,9 +449,9 @@ export default function CreativeEmpireOS() {
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastSeen: Date.now() })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, lastSeen: Date.now() })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch]);
 
   // Career Director: reads across the other engines and decides what the Command
   // Board should show — re-scoring existing quests and proposing new ones from real
@@ -427,7 +460,7 @@ export default function CreativeEmpireOS() {
   // quest was toggled done, only when the underlying situation actually changes.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    const directed = runCareerDirector({ quests, levels, events, contacts, confidence, trainingNpc });
+    const directed = runCareerDirector({ quests, levels, events, contacts: visibleContacts, confidence, trainingNpc });
     setQuests(prev => {
       const byId = new Map(prev.map(q => [q.id, q]));
       let changed = false;
@@ -447,7 +480,7 @@ export default function CreativeEmpireOS() {
       return changed ? Array.from(byId.values()) : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, onboarded, levels, events, contacts, confidence, trainingNpc]);
+  }, [loaded, onboarded, levels, events, contacts, confidence, trainingNpc, aiNpcMode]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
 
@@ -565,7 +598,8 @@ export default function CreativeEmpireOS() {
         trust: profile.trust, interest: profile.interest, momentum: "steady", lastInteraction: "just added",
         needs: profile.needs, backstory: profile.backstory, temperament: null,
         personality, relationshipMetrics: initRelationshipMetrics(),
-        detailsLog: [], metContext: "Generated by AI NPC Mode", connections: [], sim: true, pos: nextSpot() };
+        detailsLog: [], metContext: "Generated by AI NPC Mode", connections: [], sim: true, pos: nextSpot(),
+        generatedByAiMode: true };
     });
     const newPlaces = [0, 1].map(i => {
       const seedKey = `pop-biz-${stamp}-${i}`;
@@ -574,7 +608,7 @@ export default function CreativeEmpireOS() {
       return { id: "place-" + seedKey, kind: "place", name: biz.name, icon: cat.icon, color: cat.color,
         category: cat.label, pos: nextSpot(),
         note: `${biz.sizeCategory}, focused on ${biz.curatorialFocus.toLowerCase()} work. ${biz.opennessToNewArtists > 60 ? "Open to new artists." : "Selective about new artists."}`,
-        business: biz, detailsLog: [] };
+        business: biz, detailsLog: [], generatedByAiMode: true };
     });
     setContacts(cs => [...cs, ...newPeople]);
     setPlaces(ps => [...ps, ...newPlaces]);
@@ -746,7 +780,7 @@ export default function CreativeEmpireOS() {
   }
 
   const allNodes = [
-    ...contacts, ...places, ...events,
+    ...visibleContacts, ...visiblePlaces, ...events,
     ...opps.map(o => ({ ...o, kind: "opportunity" })),
     { id: "ideas-hub", kind: "idea", name: "Ideas", icon: Lightbulb, color: T.gold, pos: { x: 46, y: 40 } },
   ];
