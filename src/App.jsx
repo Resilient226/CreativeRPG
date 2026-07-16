@@ -10,6 +10,8 @@ import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier,
 import { buildUpcomingDeadlines, isUrgentDeadline } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
+import { generateNpcPersonality, initRelationshipMetrics, driftNpcOverTime, generatePublicProfile } from "./engines/npcEngine";
+import { generateBusinessProfile } from "./engines/businessEngine";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
@@ -156,6 +158,12 @@ const FILTERS = [
 const SPARE_SPOTS = [{ x: 20, y: 20 }, { x: 78, y: 40 }, { x: 40, y: 74 }, { x: 60, y: 62 }, { x: 30, y: 34 }, { x: 70, y: 16 }];
 let spotCursor = 0;
 function nextSpot() { const s = SPARE_SPOTS[spotCursor % SPARE_SPOTS.length]; spotCursor++; return s; }
+function pickGeneratedName(seedKey) {
+  const FIRST = ["Jordan", "Casey", "Morgan", "Riley", "Alex", "Sam", "Taylor", "Quinn"];
+  const LAST = ["Whitfield", "Reyes", "Okafor", "Bennett", "Alvarez", "Kim", "Novak", "During"];
+  let h = 0; for (let i = 0; i < seedKey.length; i++) h = (h * 31 + seedKey.charCodeAt(i)) >>> 0;
+  return `${FIRST[h % FIRST.length]} ${LAST[Math.floor(h / FIRST.length) % LAST.length]}`;
+}
 
 // ROLE_FLAVOR, TEMPERAMENTS, roleFlavor, temperamentFlavor, clampStat, buildPersonProfile,
 // applyInteraction, and groupPeopleBy now live in ./engines/relationshipEngine.js — the
@@ -307,6 +315,7 @@ export default function CreativeEmpireOS() {
   const [inventory, setInventory] = useState([]);
   const [financeLog, setFinanceLog] = useState([]);
   const [trainingNpc, setTrainingNpc] = useState(null);
+  const [aiNpcMode, setAiNpcMode] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -348,7 +357,6 @@ export default function CreativeEmpireOS() {
         if (save.quests) setQuests(save.quests);
         if (save.confidence) setConfidence(save.confidence);
         if (save.goal) setGoal(save.goal);
-        if (save.contacts) setContacts(save.contacts);
         if (save.places) setPlaces(save.places);
         if (save.events) setEvents(save.events);
         if (save.ideas) setIdeas(save.ideas);
@@ -358,6 +366,20 @@ export default function CreativeEmpireOS() {
         if (save.levels) setLevels(save.levels);
         if (save.inventory) setInventory(save.inventory);
         if (save.financeLog) setFinanceLog(save.financeLog);
+        if (typeof save.aiNpcMode === "boolean") setAiNpcMode(save.aiNpcMode);
+        // Lazy catch-up for practice partners: drift their career state by however
+        // much real time passed since last visit — deterministic, so this never
+        // reshuffles a personality, only advances it. Real contacts are untouched;
+        // this only ever applies to SIM characters with a generated personality.
+        if (save.contacts) {
+          const daysElapsed = save.lastSeen ? (Date.now() - save.lastSeen) / (1000 * 60 * 60 * 24) : 0;
+          const drifted = save.contacts.map(c =>
+            c.sim && c.personality
+              ? { ...c, personality: { ...c.personality, careerState: driftNpcOverTime({ id: c.id, careerState: c.personality.careerState }, daysElapsed).careerState } }
+              : c
+          );
+          setContacts(drifted);
+        }
         flash("Welcome back.");
       }
       setOnboarded(true);
@@ -377,9 +399,9 @@ export default function CreativeEmpireOS() {
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastSeen: Date.now() })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode]);
 
   // Career Director: reads across the other engines and decides what the Command
   // Board should show — re-scoring existing quests and proposing new ones from real
@@ -490,10 +512,58 @@ export default function CreativeEmpireOS() {
   function capKey(tag) { return { CAREER: "Career", RELATIONSHIPS: "Relationships", FINANCES: "Finances", TIME: "Time" }[tag] || "Career"; }
 
   function logInteraction(id) {
-    setContacts(cs => cs.map(c => c.id === id ? { ...c, ...applyInteraction(c) } : c));
+    setContacts(cs => cs.map(c => {
+      if (c.id !== id) return c;
+      const base = { ...c, ...applyInteraction(c) };
+      if (!c.relationshipMetrics) return base;
+      const rm = c.relationshipMetrics;
+      return { ...base, relationshipMetrics: { ...rm,
+        familiarity: Math.min(100, rm.familiarity + 6),
+        trust: Math.min(100, rm.trust + 3),
+        respect: Math.min(100, rm.respect + 2),
+      } };
+    }));
     flash("Logged the interaction — trust is climbing.");
     setSelectedNode(null);
   }
+  function toggleAiNpcMode() {
+    setAiNpcMode(m => !m);
+    flash(aiNpcMode ? "AI NPC Mode off." : "AI NPC Mode on — you can now populate your world with generated people and businesses.");
+  }
+  // Deliberately player-triggered, not automatic — a "Population Manager" that
+  // silently spawns entities in the background is exactly the always-running
+  // simulation this project already decided against (see the architecture spec's
+  // two disagreements). This generates a batch once, when asked, using the same
+  // deterministic engines as everything else here — no live server involved.
+  function populateWorld() {
+    const stamp = Date.now();
+    const roleOptions = ["Collector", "Gallery Owner", "Curator", "Mentor", "Critic"];
+    const newPeople = [0, 1, 2].map(i => {
+      const seedKey = `pop-npc-${stamp}-${i}`;
+      const roleName = roleOptions[(stamp + i) % roleOptions.length];
+      const personality = generateNpcPersonality({ name: seedKey, role: roleName, seedKey });
+      const profile = buildPersonProfile({ role: roleName, temperament: "", note: "" });
+      const name = pickGeneratedName(seedKey);
+      return { id: "person-" + seedKey, kind: "person", name, type: roleName, icon: User, color: T[profile.colorKey],
+        trust: profile.trust, interest: profile.interest, momentum: "steady", lastInteraction: "just added",
+        needs: profile.needs, backstory: profile.backstory, temperament: null,
+        personality, relationshipMetrics: initRelationshipMetrics(),
+        detailsLog: [], metContext: "Generated by AI NPC Mode", connections: [], sim: true, pos: nextSpot() };
+    });
+    const newPlaces = [0, 1].map(i => {
+      const seedKey = `pop-biz-${stamp}-${i}`;
+      const biz = generateBusinessProfile({ seedKey });
+      const cat = PLACE_CATEGORIES.find(c => c.key === biz.category) || PLACE_CATEGORIES[4];
+      return { id: "place-" + seedKey, kind: "place", name: biz.name, icon: cat.icon, color: cat.color,
+        category: cat.label, pos: nextSpot(),
+        note: `${biz.sizeCategory}, focused on ${biz.curatorialFocus.toLowerCase()} work. ${biz.opennessToNewArtists > 60 ? "Open to new artists." : "Selective about new artists."}`,
+        business: biz, detailsLog: [] };
+    });
+    setContacts(cs => [...cs, ...newPeople]);
+    setPlaces(ps => [...ps, ...newPlaces]);
+    flash(`Populated your world: ${newPeople.length} new people, ${newPlaces.length} new businesses.`);
+  }
+
   function trackOpportunity(o) {
     setQuests(qs => [...qs, {
       id: "gen-" + o.id, tier: "secondary", title: `Apply: ${o.name}`,
@@ -621,11 +691,14 @@ export default function CreativeEmpireOS() {
     if (addMode === "person") {
       if (!addForm.name) return;
       const profile = buildPersonProfile({ role: addForm.role, temperament: addForm.temperament, note: addForm.note });
-      setContacts(cs => [...cs, { id: "person-" + Date.now(), kind: "person", name: addForm.name,
+      const newId = "person-" + Date.now();
+      const personality = generateNpcPersonality({ name: addForm.name, role: addForm.role, temperamentKey: addForm.temperament, seedKey: newId });
+      setContacts(cs => [...cs, { id: newId, kind: "person", name: addForm.name,
         type: addForm.role || "Practice partner", icon: User, color: T[profile.colorKey],
         trust: profile.trust, interest: profile.interest, momentum: "steady", lastInteraction: "just added",
         needs: profile.needs, backstory: profile.backstory,
         temperament: profile.temperamentLabel,
+        personality, relationshipMetrics: initRelationshipMetrics(),
         detailsLog: addForm.details ? [{ id: "d-" + Date.now(), text: addForm.details, date: Date.now() }] : [],
         metContext: addForm.met || "", connections: (addForm.connections || "").split(",").map(s => s.trim()).filter(Boolean),
         sim: true, pos }]);
@@ -732,7 +805,8 @@ export default function CreativeEmpireOS() {
           onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)}
         />
       )}
-      {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels} />}
+      {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels}
+        aiNpcMode={aiNpcMode} onToggleAiNpcMode={toggleAiNpcMode} onPopulateWorld={populateWorld} />}
 
       {selectedNode && (
         <NodeSheet node={selectedNode} onClose={() => setSelectedNode(null)}
@@ -1590,6 +1664,17 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
                   {node.backstory}
                 </div>
               )}
+              {node.personality && (
+                <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#00000010" }}>
+                  <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: T.wood }}>WHAT YOU'VE NOTICED</div>
+                  {generatePublicProfile(node.personality, node.relationshipMetrics).map((line, i) => (
+                    <div key={i} style={{ fontFamily: body, fontSize: 12.5, marginTop: i === 0 ? 4 : 3, lineHeight: 1.4 }}>• {line}</div>
+                  ))}
+                  <div style={{ fontFamily: body, fontSize: 9.5, color: "#8a7350", marginTop: 6, fontStyle: "italic" }}>
+                    More reveals itself the better you know them.
+                  </div>
+                </div>
+              )}
               {node.temperament && (
                 <div style={{ display: "inline-block", marginTop: 8, padding: "3px 9px", borderRadius: 20,
                   background: `${T.purple}22`, border: `1px solid ${T.purple}55`, fontFamily: head, fontSize: 10, fontWeight: 700, color: "#4a3568" }}>
@@ -1870,7 +1955,7 @@ function Quests_({ quests, onToggle }) {
 }
 
 /* ================= PROFILE ================= */
-function Profile_({ confidence, onQuickAccess, skills, levels }) {
+function Profile_({ confidence, onQuickAccess, skills, levels, aiNpcMode, onToggleAiNpcMode, onPopulateWorld }) {
   const meta = { Career: Briefcase, Inventory: ImageIcon, Finances: DollarSign, Relationships: Users, Health: Heart, Time: Clock };
   return (
     <div style={{ padding: "18px 14px" }}>
@@ -1954,6 +2039,25 @@ function Profile_({ confidence, onQuickAccess, skills, levels }) {
             <Icon size={16} color={T.gold} /><span style={{ fontFamily: head, fontSize: 10, fontWeight: 700 }}>{label}</span>
           </button>
         ))}
+      </div>
+      <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>AI NPC MODE</div>
+      <div style={{ background: T.panel, border: `2px solid ${T.wood}`, borderRadius: 12, padding: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontFamily: body, fontSize: 12, color: T.textCream, maxWidth: 220 }}>
+            When on, you can generate new fictional practice partners and businesses to fill out your world. Never touches real contacts.
+          </div>
+          <button onClick={onToggleAiNpcMode} style={{ width: 46, height: 26, borderRadius: 20, flexShrink: 0,
+            border: `2px solid ${T.wood}`, background: aiNpcMode ? T.green : "transparent", position: "relative" }}>
+            <div style={{ position: "absolute", top: 2, left: aiNpcMode ? 22 : 2, width: 18, height: 18, borderRadius: "50%",
+              background: "#fff", transition: "left 0.15s ease" }} />
+          </button>
+        </div>
+        {aiNpcMode && (
+          <button onClick={onPopulateWorld} style={{ width: "100%", marginTop: 10, padding: 11, borderRadius: 10,
+            border: "none", background: T.gold, color: T.ink, fontFamily: head, fontWeight: 700, fontSize: 13 }}>
+            Populate My World
+          </button>
+        )}
       </div>
       <button onClick={() => signOutUser().catch(() => {})} style={{ width: "100%", marginTop: 18, padding: 12,
         borderRadius: 11, border: `2px solid ${T.rose}66`, background: "transparent", color: T.rose,
