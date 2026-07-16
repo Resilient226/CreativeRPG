@@ -54,6 +54,23 @@ export const TEMPERAMENTS = [
 ];
 export function temperamentFlavor(key) { return TEMPERAMENTS.find(t => t.key === key) || null; }
 
+/**
+ * Training Grounds' Evelyn model stores trust/interest nested under `npc.state`,
+ * shaped differently from the flat contact objects the rest of the app uses.
+ * This is the first, honestly-scoped step of reconciling the two systems: it makes
+ * Evelyn's numbers READABLE in the common shape, so Career Director can finally see
+ * she exists at all. It does NOT merge the two systems' storage or data models —
+ * Evelyn's hidden traits, memory log, and mood stay exactly where they are.
+ */
+export function normalizeTrainingNpc(npc) {
+  if (!npc || !npc.state) return null;
+  return {
+    id: npc.id, name: npc.name, kind: "trainingNpc",
+    trust: npc.state.trust, interest: npc.state.interest,
+    relationshipScore: npc.state.relationshipScore, mood: npc.state.mood,
+  };
+}
+
 export function clampStat(n) { return Math.max(5, Math.min(95, n)); }
 
 /**
