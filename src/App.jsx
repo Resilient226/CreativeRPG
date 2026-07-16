@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import ReactDOM from "react-dom/client";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { storageGet, storageSet } from "./lib/storage";
 import { onAuthChange, signUpEmail, signInEmail, signInGoogle, signOutUser, authErrorMessage } from "./lib/firebase";
 import { callModel, allText, extractJson } from "./lib/model";
@@ -6,7 +9,8 @@ import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
 import { buildPersonProfile, applyInteraction, groupPeopleBy, temperamentFlavor, clampStat, normalizeTrainingNpc } from "./engines/relationshipEngine";
 import { loadNpc } from "./training/data";
-import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, computeWorldTransform, WORLD_ORIGIN, DISTRICT_LAYOUT } from "./engines/mapEngine";
+import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, DISTRICT_LAYOUT } from "./engines/mapEngine";
+import { DEFAULT_HOME_BASE, geocodeAddress } from "./engines/geoEngine";
 import { buildUpcomingDeadlines, isUrgentDeadline } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
@@ -316,6 +320,7 @@ export default function CreativeEmpireOS() {
   const [financeLog, setFinanceLog] = useState([]);
   const [trainingNpc, setTrainingNpc] = useState(null);
   const [aiNpcMode, setAiNpcMode] = useState(false);
+  const [homeBase, setHomeBase] = useState(DEFAULT_HOME_BASE);
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -393,6 +398,18 @@ export default function CreativeEmpireOS() {
   useEffect(() => {
     if (!authUser) return;
     loadNpc().then(npc => setTrainingNpc(normalizeTrainingNpc(npc))).catch(() => {});
+  }, [authUser]);
+
+  // Real device location for the map's home base — falls back to Atlanta (where
+  // this app's seed data already lives) if permission is denied or unavailable.
+  // This is what "opportunities placed at real-world locations" is actually centered on.
+  useEffect(() => {
+    if (!authUser || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => setHomeBase({ lat: pos.coords.latitude, lng: pos.coords.longitude, label: "Your location" }),
+      () => { /* denied or unavailable — DEFAULT_HOME_BASE (Atlanta) already covers this */ },
+      { timeout: 8000 }
+    );
   }, [authUser]);
 
   // Save on every meaningful change. Skipped until onboarding + the initial load have
@@ -802,7 +819,7 @@ export default function CreativeEmpireOS() {
       {tab === "map" && (
         <MapScreen_
           nodes={allNodes} quests={quests} events={events} energy={energy}
-          onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)}
+          onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase}
         />
       )}
       {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels}
@@ -1200,7 +1217,7 @@ function MiniStep({ icon: Icon, label }) {
 }
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
-function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
+function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const visible = nodes.filter(n => filter === "all" || n.kind === filter || (filter === "idea" && n.kind === "idea"));
@@ -1319,172 +1336,147 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas }) {
           )}
         </div>
       ) : (
-        <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} />
+        <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} />
       )}
     </div>
   );
 }
 
 /* ================================================================
-   WORLD ENGINE — a real camera (x, y, zoom), not a fixed image.
-   Districts are COMPUTED from actual game state (grouped by kind),
-   never hand-placed art. Three LOD tiers driven purely by zoom level:
-     zoom < 0.7          → Districts (colored regions, aggregate counts)
-     0.7 <= zoom < 1.9   → Buildings/NPCs (individual entities, clickable)
-     zoom >= 1.9 + focus → Interior (one entity's full scene, inline)
-   Deliberate scope: DOM + CSS transforms, not canvas/WebGL — the right
-   choice for tens-to-low-hundreds of entities, not thousands. "Infinite"
-   pan means no hard boundary is enforced, not that content exists forever.
+   WORLD ENGINE — now a REAL MapLibre GL JS map as the base layer, with the game's
+   existing Districts/Buildings/NPCs/Opportunities/Events rendered as overlays on
+   top. Same three LOD tiers as before, now driven by real MapLibre zoom levels:
+     zoom < LOD_DISTRICT   → Districts (category legend, small color-coded dots)
+     LOD_DISTRICT..INTERIOR → Buildings/NPCs (individual entities, clickable)
+     zoom >= LOD_INTERIOR + focus → Interior (one entity's full scene, inline)
+   Upgraded from the previous DOM+CSS-transform renderer per explicit instruction —
+   no gameplay logic was removed, only the rendering technology underneath it.
    ================================================================ */
-// ZOOM_MIN/MAX, LOD_DISTRICT/INTERIOR, clampZoom, WORLD_ORIGIN, DISTRICT_LAYOUT,
-// buildDistricts, and computeWorldTransform now live in ./engines/mapEngine.js —
-// the third engine extracted per THE_CREATIVE_ARCHITECTURE_SPEC.md §3. Camera state
-// (useState, pointer handlers, refs) legitimately stays in this component — only the
-// pure district/entity/LOD math moved out.
 
+// ZOOM_MIN/MAX, LOD_DISTRICT/INTERIOR, clampZoom, DISTRICT_LAYOUT, and buildDistricts
+// now live in ./engines/mapEngine.js. The camera itself is now a REAL MapLibre GL JS
+// map — this file only wires the game's existing entities/districts/interior logic
+// onto it as overlays, per the explicit instruction: upgrade the renderer, keep
+// every existing gameplay system. Nothing about Districts, Buildings, NPCs,
+// Opportunities, Quests, or Events was removed — only how their positions are
+// computed (real lat/lng via mapEngine + geoEngine) and how they're drawn
+// (MapLibre Markers instead of CSS-transformed divs) changed.
+//
+// Free, no-API-key vector tile style — OpenFreeMap hosts unlimited, keyless OSM
+// vector tiles specifically for MapLibre GL JS. No account, no cost, no rate limit
+// tied to a key. This is a live network dependency: it can't be verified from a
+// sandboxed environment with restricted egress, only from the deployed app in a
+// real browser.
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
-function WorldEngine_({ nodes, onSelect, onShowIdeas }) {
-  const [camera, setCamera] = useState({ x: WORLD_ORIGIN, y: WORLD_ORIGIN, zoom: 0.5 });
-  const [animating, setAnimating] = useState(false);
-  const [interior, setInterior] = useState(null); // the one entity shown in interior view
-  const dragRef = useRef(null);
-  const pinchRef = useRef(null); // { id0, id1, startDist, startZoom }
-  const activePointers = useRef(new Map());
-  const viewportRef = useRef(null);
+function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const markersRef = useRef([]); // { marker, root } — so React roots get cleanly unmounted, not leaked
+  const [zoom, setZoom] = useState(LOD_DISTRICT - 1);
+  const [interior, setInterior] = useState(null);
+  const [mapReady, setMapReady] = useState(false);
 
-  const districts = useMemo(() => buildDistricts(nodes), [nodes]);
+  const districts = useMemo(() => buildDistricts(nodes, homeBase), [nodes, homeBase]);
+  const tier = computeTier(zoom, interior);
 
-  function flyTo(x, y, zoom) {
-    setAnimating(true);
-    setCamera({ x, y, zoom: clampZoom(zoom) });
-    setTimeout(() => setAnimating(false), 420);
+  // Initialize the real map exactly once. Centered on the player's actual home base
+  // (real geolocation, with an Atlanta fallback — see the App-level homeBase state).
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+    const map = new maplibregl.Map({
+      container: containerRef.current, style: MAP_STYLE_URL,
+      center: [homeBase.lng, homeBase.lat], zoom: LOD_DISTRICT - 1, attributionControl: false,
+    });
+    map.on("zoom", () => setZoom(map.getZoom()));
+    map.on("load", () => setMapReady(true));
+    mapRef.current = map;
+    return () => { map.remove(); mapRef.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function flyTo(lng, lat, targetZoom) {
+    mapRef.current?.flyTo({ center: [lng, lat], zoom: targetZoom, duration: 500 });
   }
-  function zoomOutToDistricts() {
+  function returnToDistrictView() {
     setInterior(null);
-    flyTo(WORLD_ORIGIN, WORLD_ORIGIN, 0.5);
+    flyTo(homeBase.lng, homeBase.lat, LOD_DISTRICT - 1);
   }
-  function enterDistrict(d) { flyTo(d.cx, d.cy, 1.2); }
   function enterEntity(e) {
     if (e.kind === "idea") { onShowIdeas(); return; }
-    flyTo(e.worldX, e.worldY, LOD_INTERIOR + 0.3);
+    flyTo(e.lng, e.lat, LOD_INTERIOR + 0.5);
     setInterior(e);
   }
 
-  // Pointer-based drag-to-pan (mouse or single touch) — 1:1, never CSS-transitioned.
-  function onPointerDown(e) {
-    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (activePointers.current.size === 1) {
-      dragRef.current = { startX: e.clientX, startY: e.clientY, camX: camera.x, camY: camera.y };
-    } else if (activePointers.current.size === 2) {
-      const pts = [...activePointers.current.values()];
-      const startDist = Math.max(1, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)); // never 0 — avoids a divide-by-zero
-      pinchRef.current = { startDist, startZoom: camera.zoom };
-      dragRef.current = null;
-    }
-  }
-  function onPointerMove(e) {
-    if (!activePointers.current.has(e.pointerId)) return;
-    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (activePointers.current.size === 2 && pinchRef.current) {
-      const pts = [...activePointers.current.values()];
-      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      const nz = clampZoom(pinchRef.current.startZoom * (dist / pinchRef.current.startDist));
-      setCamera(c => ({ ...c, zoom: nz }));
-      return;
-    }
-    if (dragRef.current && tier === "building") {
-      // FIX: capture the drag-start snapshot NOW, as plain values. Reading dragRef.current
-      // a second time from *inside* setCamera's updater (as this used to) is unsafe — that
-      // callback can run after a subsequent fast pointerup has already nulled dragRef.current,
-      // crashing with "null is not an object" (confirmed by the actual production error).
-      const start = dragRef.current;
-      const dx = e.clientX - start.startX, dy = e.clientY - start.startY;
-      setCamera(c => ({ ...c, x: start.camX - dx / c.zoom, y: start.camY - dy / c.zoom }));
-    }
-  }
-  function onPointerUp(e) {
-    activePointers.current.delete(e.pointerId);
-    if (activePointers.current.size < 2) pinchRef.current = null;
-    if (activePointers.current.size === 0) dragRef.current = null;
-  }
-  function onWheel(e) {
-    e.preventDefault();
-    setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * (e.deltaY < 0 ? 1.15 : 0.87)) }));
-  }
+  // Rebuild markers whenever the entities, tier, or map readiness changes. Entity
+  // counts here are small (tens, not thousands) — a full rebuild each time is simple
+  // and correct, not a real performance concern at this scale.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    markersRef.current.forEach(({ marker, root }) => { root.unmount(); marker.remove(); });
+    markersRef.current = [];
 
-  const tier = computeTier(camera.zoom, interior);
-  const rect = viewportRef.current?.getBoundingClientRect();
-  const vw = rect?.width || 400, vh = rect?.height || 360;
-  // District tier always renders centered on WORLD_ORIGIN (computeWorldTransform's job) —
-  // this is the fix for "zooming out showed only 2 of 5 districts," now living in the
-  // engine and covered by its own regression test rather than inline logic here.
-  const worldTransform = computeWorldTransform({ camera, vw, vh, tier });
+    districts.forEach(d => {
+      const dColor = T[d.colorKey];
+      d.entities.forEach(e => {
+        const el = document.createElement("div");
+        const root = ReactDOM.createRoot(el);
+        if (tier === "district") {
+          // District tier: a small color-coded dot per category — real geography
+          // doesn't have floating fictional circles, but the category/count concept
+          // is preserved as color + the legend panel below, not silently dropped.
+          root.render(
+            <button onClick={() => flyTo(e.lng, e.lat, LOD_DISTRICT + 3)} style={{ width: 16, height: 16, borderRadius: "50%",
+              background: dColor, border: "2px solid #fff", boxShadow: "0 1px 4px #0008" }} />
+          );
+        } else {
+          root.render(<EntityPin entity={e} onClick={() => enterEntity(e)} />);
+        }
+        const marker = new maplibregl.Marker({ element: el }).setLngLat([e.lng, e.lat]).addTo(map);
+        markersRef.current.push({ marker, root });
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [districts, tier, mapReady]);
 
   return (
     <div style={{ margin: "10px 14px 0", borderRadius: 18, overflow: "hidden", border: `3px solid ${T.wood}`,
-      position: "relative", height: 380, background: "linear-gradient(180deg,#1a2a44,#0d1420)" }}>
+      position: "relative", height: 380, background: "#1a2a44" }}>
+      <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
-      {/* the pan/zoom viewport */}
-      <div ref={viewportRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel}
-        style={{ position: "absolute", inset: 0, touchAction: "none", cursor: dragRef.current ? "grabbing" : "grab", overflow: "hidden" }}>
-        {/* FIX: this div previously declared itself as 1x1px while its real children rendered
-            hundreds of pixels away in every direction (districts span roughly x:65-735,
-            y:65-735 in world space). That size/content mismatch, combined with a live
-            scale() transform during pinch-zoom, is a known way to make mobile browsers
-            briefly black out while recompositing — the browser's declared layer bounds
-            didn't match what it actually had to paint. Now the box honestly contains its
-            content (world coordinates are pre-shifted into 0-800 range via WORLD_ORIGIN),
-            plus explicit GPU-layer hints as a second line of defense. */}
-        <div style={{ position: "absolute", left: 0, top: 0, width: 800, height: 800,
-          transform: worldTransform, transformOrigin: "0 0", willChange: "transform",
-          backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden",
-          transition: animating ? "transform 0.42s cubic-bezier(.2,.8,.2,1)" : "none" }}>
-
-          {districts.map(d => {
-            const districtVisible = tier === "district";
-            const dColor = T[d.colorKey];
-            return (
-              <div key={d.key}>
-                {districtVisible && (
-                  <button onClick={() => enterDistrict(d)} style={{ position: "absolute", left: d.cx, top: d.cy,
-                    transform: "translate(-50%,-50%)", width: 150, height: 150, borderRadius: "50%",
-                    background: `${dColor}33`, border: `3px solid ${dColor}`, display: "flex",
-                    flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
-                    <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15, color: "#fff" }}>{d.label}</div>
-                    <div style={{ fontFamily: mono_body(), fontSize: 11, color: "#ffffffcc" }}>{d.entities.length} {d.entities.length === 1 ? "item" : "items"}</div>
-                  </button>
-                )}
-                {tier === "building" && d.entities.map(e => (
-                  <EntityPin key={e.id} entity={e} onClick={() => enterEntity(e)} />
-                ))}
-              </div>
-            );
-          })}
+      {/* district-tier legend — the count/label information the old floating circles
+          used to carry, now a real overlay panel instead of fictional map geometry */}
+      {tier === "district" && (
+        <div style={{ position: "absolute", top: 8, left: 10, background: "#00000090", borderRadius: 10,
+          padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
+          {districts.map(d => (
+            <div key={d.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ width: 9, height: 9, borderRadius: "50%", background: T[d.colorKey] }} />
+              <span style={{ fontFamily: head, fontSize: 10.5, fontWeight: 700, color: "#fff" }}>{d.label} · {d.entities.length}</span>
+            </div>
+          ))}
         </div>
-      </div>
+      )}
 
-      {/* interior takeover — a real third tier, not just the same detail sheet */}
+      {/* interior takeover — unchanged from before, a real third tier, not a modal */}
       {tier === "interior" && interior && (
-        <InteriorScene entity={interior} onExit={() => { setInterior(null); flyTo(interior.worldX, interior.worldY, 1.2); }}
+        <InteriorScene entity={interior} onExit={() => { setInterior(null); flyTo(interior.lng, interior.lat, LOD_DISTRICT + 3); }}
           onOpenFull={() => onSelect(interior)} />
       )}
 
-      {/* zoom controls — reliable fallback alongside wheel/pinch, esp. on mobile */}
+      {/* zoom controls — same custom styling as before, now calling the real map */}
       {tier !== "interior" && (
         <div style={{ position: "absolute", right: 10, bottom: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-          <button onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * 1.3) }))}
-            style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 16 }}>+</button>
-          <button onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * 0.77) }))}
-            style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 16 }}>−</button>
+          <button onClick={() => mapRef.current?.zoomIn()} style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 16 }}>+</button>
+          <button onClick={() => mapRef.current?.zoomOut()} style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 16 }}>−</button>
           {tier !== "district" && (
-            <button onClick={zoomOutToDistricts}
-              style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 13 }}>⌂</button>
+            <button onClick={returnToDistrictView} style={{ width: 34, height: 34, borderRadius: 8, background: "#00000088", border: "1px solid #ffffff33", color: "#fff", fontSize: 13 }}>⌂</button>
           )}
         </div>
       )}
 
-      <div style={{ position: "absolute", top: 8, left: 10, background: "#00000088", border: "1px solid #ffffff22",
+      <div style={{ position: "absolute", top: 8, right: 10, background: "#00000088", border: "1px solid #ffffff22",
         borderRadius: 8, padding: "3px 9px", fontFamily: head, fontSize: 9.5, fontWeight: 700, color: "#fff" }}>
         {tier === "district" ? "DISTRICT VIEW" : tier === "building" ? "BUILDING VIEW" : "INTERIOR"}
       </div>
