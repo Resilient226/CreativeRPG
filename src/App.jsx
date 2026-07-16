@@ -4,7 +4,8 @@ import { onAuthChange, signUpEmail, signInEmail, signInGoogle, signOutUser, auth
 import { callModel, allText, extractJson } from "./lib/model";
 import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
-import { buildPersonProfile, applyInteraction, groupPeopleBy, temperamentFlavor, clampStat } from "./engines/relationshipEngine";
+import { buildPersonProfile, applyInteraction, groupPeopleBy, temperamentFlavor, clampStat, normalizeTrainingNpc } from "./engines/relationshipEngine";
+import { loadNpc } from "./training/data";
 import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, computeWorldTransform, WORLD_ORIGIN, DISTRICT_LAYOUT } from "./engines/mapEngine";
 import { buildUpcomingDeadlines, isUrgentDeadline } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
@@ -305,6 +306,7 @@ export default function CreativeEmpireOS() {
   const [energy, setEnergy] = useState(10);
   const [inventory, setInventory] = useState([]);
   const [financeLog, setFinanceLog] = useState([]);
+  const [trainingNpc, setTrainingNpc] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -363,6 +365,14 @@ export default function CreativeEmpireOS() {
     })();
   }, [authUser]);
 
+  // Loads Evelyn's Training Grounds state so Career Director can finally see her too —
+  // this is the actual reconciliation: her data stays where it lives, we just also
+  // read it here, normalized into the shape the rest of the app understands.
+  useEffect(() => {
+    if (!authUser) return;
+    loadNpc().then(npc => setTrainingNpc(normalizeTrainingNpc(npc))).catch(() => {});
+  }, [authUser]);
+
   // Save on every meaningful change. Skipped until onboarding + the initial load have
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
@@ -378,7 +388,7 @@ export default function CreativeEmpireOS() {
   // quest was toggled done, only when the underlying situation actually changes.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    const directed = runCareerDirector({ quests, levels, events, contacts, confidence });
+    const directed = runCareerDirector({ quests, levels, events, contacts, confidence, trainingNpc });
     setQuests(prev => {
       const byId = new Map(prev.map(q => [q.id, q]));
       let changed = false;
@@ -398,7 +408,7 @@ export default function CreativeEmpireOS() {
       return changed ? Array.from(byId.values()) : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, onboarded, levels, events, contacts, confidence]);
+  }, [loaded, onboarded, levels, events, contacts, confidence, trainingNpc]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
 
