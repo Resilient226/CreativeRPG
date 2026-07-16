@@ -28,7 +28,7 @@ function estimateEffortMinutes(effort) {
  * Returns quest-shaped objects WITHOUT an id (identity is the caller's job, same
  * boundary as every other engine here) and WITHOUT a tier yet (rankQuests decides that).
  */
-export function generateGapQuests({ levels = [], events = [], contacts = [], confidence = {} } = {}) {
+export function generateGapQuests({ levels = [], events = [], contacts = [], confidence = {}, trainingNpc = null } = {}) {
   const proposals = [];
 
   // Gap 1: an at-risk milestone event's single most-blocking unmet requirement.
@@ -92,6 +92,19 @@ export function generateGapQuests({ levels = [], events = [], contacts = [], con
     }
   }
 
+  // Gap 5: Training Grounds practice has gone cold. This is the first thing Career
+  // Director has ever been able to see across into Training Grounds' separate NPC
+  // system — previously these two systems shared no data at all.
+  if (trainingNpc && (trainingNpc.trust < 40 || trainingNpc.interest < 40)) {
+    proposals.push({
+      id: `gap-training-${trainingNpc.id}`,
+      title: `Practice with ${trainingNpc.name} in Training Grounds`,
+      why: `Your practice relationship with ${trainingNpc.name} is at trust ${trainingNpc.trust}/100, interest ${trainingNpc.interest}/100 — a session before you're in a real negotiation would help.`,
+      tag: "CAREER", effort: "20 min", due: "—",
+      generatedBy: "careerDirector", sourceType: "training-cold", sourceId: trainingNpc.id,
+    });
+  }
+
   return proposals;
 }
 
@@ -140,10 +153,10 @@ export function rankQuests(quests, confidence = {}) {
  * ranks the whole set, and returns what the Command Board should show. Quests marked
  * `done` are passed through untouched (already-completed history isn't re-ranked).
  */
-export function runCareerDirector({ quests = [], levels = [], events = [], contacts = [], confidence = {} } = {}) {
+export function runCareerDirector({ quests = [], levels = [], events = [], contacts = [], confidence = {}, trainingNpc = null } = {}) {
   const doneQuests = quests.filter(q => q.done);
   const activeExisting = quests.filter(q => !q.done);
-  const gapQuests = generateGapQuests({ levels, events, contacts, confidence });
+  const gapQuests = generateGapQuests({ levels, events, contacts, confidence, trainingNpc });
   const ranked = rankQuests([...activeExisting, ...gapQuests], confidence);
   return [...ranked, ...doneQuests];
 }
