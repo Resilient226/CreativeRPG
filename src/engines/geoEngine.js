@@ -52,6 +52,23 @@ export function jitterNearBase(baseLat, baseLng, seedKey, radiusKm = 3) {
 
 /** Atlanta fallback — used only if the browser has no location and the player
  *  hasn't set a home base yet. Matches where this app's real seed data already lives. */
+/** Real spherical bearing (compass heading, 0-360°) from one coordinate to another —
+ *  used to derive the player avatar's facing direction from consecutive GPS fixes
+ *  when the device doesn't report heading directly. Returns null if the two points
+ *  are too close together to compute a meaningful direction (avoids jittery heading
+ *  from GPS noise when the player is essentially stationary). */
+export function computeHeadingFromPositions(from, to) {
+  const distKm = haversineDistanceKm(from.lat, from.lng, to.lat, to.lng);
+  if (distKm < 0.001) return null; // less than ~1m apart — not enough signal to trust
+  const toRad = d => (d * Math.PI) / 180;
+  const dLng = toRad(to.lng - from.lng);
+  const lat1 = toRad(from.lat), lat2 = toRad(to.lat);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  const bearing = (Math.atan2(y, x) * 180) / Math.PI;
+  return (bearing + 360) % 360;
+}
+
 export const DEFAULT_HOME_BASE = { lat: 33.7490, lng: -84.3880, label: "Atlanta, GA" };
 
 /**
