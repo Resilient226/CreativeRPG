@@ -9,7 +9,7 @@ import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
 import { applyInteraction, groupPeopleBy, clampStat, normalizeTrainingNpc } from "./engines/relationshipEngine";
 import { loadNpc } from "./training/data";
-import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, DISTRICT_LAYOUT } from "./engines/mapEngine";
+import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, DEFAULT_ZOOM, clampZoom, computeTier, buildDistricts, DISTRICT_LAYOUT } from "./engines/mapEngine";
 import { DEFAULT_HOME_BASE, geocodeAddress } from "./engines/geoEngine";
 import { buildUpcomingDeadlines, isUrgentDeadline, consolidateByTitle, filterDeadlines } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
@@ -1666,10 +1666,18 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     const boundsRadius = 0.018; // roughly ~2km — keeps panning within the surrounding blocks, not the whole city
+    // Pushes the geographic center (where the player stands) down into the lower
+    // third of the screen, Pokémon GO style — a plain top-padding trick, not a
+    // different projection.
+    const viewportHeight = containerRef.current.clientHeight || 600;
     const map = new maplibregl.Map({
       container: containerRef.current, style: MAP_STYLE_URL,
-      center: [homeBase.lng, homeBase.lat], zoom: LOD_DISTRICT - 1,
-      pitch: 55, minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX, attributionControl: false,
+      center: [homeBase.lng, homeBase.lat], zoom: DEFAULT_ZOOM,
+      // CRITICAL: MapLibre's default maxPitch cap is 60° — setting pitch above that
+      // without also raising maxPitch gets silently clamped back down to 60, and
+      // nothing about "increase the pitch toward the horizon" would actually happen.
+      pitch: 72, maxPitch: 82, minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX, attributionControl: false,
+      padding: { top: viewportHeight * 0.38, bottom: 0, left: 0, right: 0 },
       maxBounds: [
         [homeBase.lng - boundsRadius, homeBase.lat - boundsRadius],
         [homeBase.lng + boundsRadius, homeBase.lat + boundsRadius],
@@ -1715,11 +1723,11 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
     setInterior(null);
     // Never fully flattens — "always feel tilted, Pokémon GO style" even at the
     // widest allowed overview, not a top-down map-app view.
-    flyTo(homeBase.lng, homeBase.lat, LOD_DISTRICT - 1, 40);
+    flyTo(homeBase.lng, homeBase.lat, DEFAULT_ZOOM, 65);
   }
   function enterEntity(e) {
     if (e.kind === "idea") { onShowIdeas(); return; }
-    flyTo(e.lng, e.lat, LOD_INTERIOR + 0.5, 60); // steeper, more immersive tilt up close
+    flyTo(e.lng, e.lat, LOD_INTERIOR + 0.5, 78); // near-horizon, immersive tilt right up close
     setInterior(e);
   }
 
@@ -1743,7 +1751,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
           // doesn't have floating fictional circles, but the category/count concept
           // is preserved as color + the legend panel below, not silently dropped.
           root.render(
-            <button onClick={() => flyTo(e.lng, e.lat, LOD_DISTRICT + 3, 45)} style={{ width: 16, height: 16, borderRadius: "50%",
+            <button onClick={() => flyTo(e.lng, e.lat, LOD_DISTRICT + 1, 72)} style={{ width: 16, height: 16, borderRadius: "50%",
               background: dColor, border: "2px solid #fff", boxShadow: "0 1px 4px #0008" }} />
           );
         } else if (markerCategory) {
