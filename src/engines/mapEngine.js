@@ -11,12 +11,15 @@
 
 import { KNOWN_LOCATIONS, jitterNearBase } from "./geoEngine";
 
-/* ---------------- LOD thresholds, now real MapLibre zoom levels (roughly 0-22) ---------------- */
-export const ZOOM_MIN = 3, ZOOM_MAX = 20;
-export const LOD_DISTRICT = 12, LOD_INTERIOR = 17;
+/* ---------------- LOD thresholds, now real MapLibre zoom levels (roughly 0-22) ----------------
+   ZOOM_MIN is deliberately raised to real neighborhood scale (14 ≈ several blocks visible,
+   not a whole city) — "lock gameplay to a neighborhood/street scale" means the camera
+   should be structurally incapable of zooming out past that, not just discouraged from it. */
+export const ZOOM_MIN = 14, ZOOM_MAX = 20;
+export const LOD_DISTRICT = 15, LOD_INTERIOR = 17;
 
 export function clampZoom(z) {
-  if (!Number.isFinite(z)) return 12;
+  if (!Number.isFinite(z)) return LOD_DISTRICT;
   return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
 }
 
