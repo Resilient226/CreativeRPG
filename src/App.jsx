@@ -838,7 +838,7 @@ export default function CreativeEmpireOS() {
       {tab === "map" && (
         <MapScreen_
           nodes={allNodes} quests={quests} events={events} energy={energy}
-          onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase}
+          onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
         />
       )}
       {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels}
@@ -1237,7 +1237,7 @@ function MiniStep({ icon: Icon, label }) {
 }
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
-function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase }) {
+function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0 }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const visible = nodes.filter(n => filter === "all" || n.kind === filter || (filter === "idea" && n.kind === "idea"));
@@ -1262,8 +1262,10 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
       <div style={{ display: "flex", gap: 8, padding: "0 14px" }}>
         <WoodPanel style={{ flex: 1, padding: "8px 10px" }}>
           <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, color: T.gold }}>LEVEL</div>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 16 }}>17</div>
-          <div style={{ fontFamily: body, fontSize: 9, color: T.textMuted }}>2,840 XP to next</div>
+          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 16 }}>{computeProfileLevel(xp).level}</div>
+          <div style={{ fontFamily: body, fontSize: 9, color: T.textMuted }}>
+            {computeProfileLevel(xp).xpForNextLevel != null ? `${computeProfileLevel(xp).xpForNextLevel - computeProfileLevel(xp).xpIntoLevel} XP to next` : "Max level"}
+          </div>
         </WoodPanel>
         <Scroll style={{ flex: 2, padding: "8px 10px" }}>
           <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1 }}>NEAREST DEADLINES</div>
@@ -2333,12 +2335,18 @@ function Onboarding_({ onFinish }) {
   const [step, setStep] = useState(0);
   const [a, setA] = useState({ strengths: [], weaknesses: [] });
   const set = (k, v) => setA(f => ({ ...f, [k]: v }));
-  const steps = ["Who are you", "Your mission", "Strengths & weaknesses", "Life & time", "Career so far", "Your world"];
+  // Two genuinely different paths — Explorer isn't necessarily a practicing artist,
+  // so the career-assessment questions (finished works, shows, sales) don't apply
+  // and shouldn't be asked.
+  const isExplorer = a.playerMode === "explorer";
+  const steps = isExplorer
+    ? ["Explorer or Creator", "Who are you", "What you love", "You're in"]
+    : ["Explorer or Creator", "Who are you", "Your mission", "Strengths & weaknesses", "Life & time", "Career so far", "Your world"];
 
   function next() { setStep(s => Math.min(steps.length - 1, s + 1)); }
   function back() { setStep(s => Math.max(0, s - 1)); }
 
-  const preview = step === steps.length - 1 ? computeLevels(a) : null;
+  const preview = (!isExplorer && step === steps.length - 1) ? computeLevels(a) : null;
   const previewLevel = preview ? preview.find(l => l.state === "current") : null;
 
   return (
@@ -2360,12 +2368,54 @@ function Onboarding_({ onFinish }) {
       <Scroll style={{ padding: 18 }}>
         {step === 0 && (
           <>
-            <FormInput label="Your name" value={a.name} onChange={v => set("name", v)} placeholder="What should the app call you?" />
-            <FormInput label="Your medium / craft" value={a.medium} onChange={v => set("medium", v)} placeholder="e.g. Oil painting, illustration, sculpture…" />
-            <FormInput label="Years creating" value={a.yearsCreating} onChange={v => set("yearsCreating", v)} type="number" placeholder="e.g. 5" />
+            <div style={{ fontFamily: body, fontSize: 12.5, color: "#5b4630", textAlign: "center", marginBottom: 14, lineHeight: 1.5 }}>
+              Two ways to use this — pick what fits you right now. You can't switch later in this version, so choose the one that's actually true today.
+            </div>
+            <button onClick={() => set("playerMode", "explorer")} style={{ width: "100%", textAlign: "left", padding: 14, borderRadius: 12, marginBottom: 10,
+              border: `3px solid ${a.playerMode === "explorer" ? T.gold : T.wood}`, background: a.playerMode === "explorer" ? `${T.gold}22` : "#fffaf0" }}>
+              <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15 }}>🧭 Explorer <span style={{ color: T.forestLight, fontSize: 11 }}>(Free)</span></div>
+              <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 4, lineHeight: 1.4 }}>
+                Discover art, visit galleries and museums, complete quests, earn XP and badges. For anyone who loves the scene, not just artists.
+              </div>
+            </button>
+            <button onClick={() => set("playerMode", "creator")} style={{ width: "100%", textAlign: "left", padding: 14, borderRadius: 12,
+              border: `3px solid ${a.playerMode === "creator" ? T.gold : T.wood}`, background: a.playerMode === "creator" ? `${T.gold}22` : "#fffaf0" }}>
+              <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15 }}>🎨 Creator</div>
+              <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 4, lineHeight: 1.4 }}>
+                A full artist profile, portfolio, AI-ranked opportunities, career analytics, and everything Explorer has too.
+              </div>
+            </button>
           </>
         )}
         {step === 1 && (
+          <>
+            <FormInput label="Your name" value={a.name} onChange={v => set("name", v)} placeholder="What should the app call you?" />
+            {!isExplorer && (
+              <>
+                <FormInput label="Your medium / craft" value={a.medium} onChange={v => set("medium", v)} placeholder="e.g. Oil painting, illustration, sculpture…" />
+                <FormInput label="Years creating" value={a.yearsCreating} onChange={v => set("yearsCreating", v)} type="number" placeholder="e.g. 5" />
+              </>
+            )}
+          </>
+        )}
+        {isExplorer && step === 2 && (
+          <>
+            <FormInput label="What draws you to the art scene?" value={a.missionText} onChange={v => set("missionText", v)} area
+              placeholder="e.g. I love discovering new galleries. I want to support local artists. I'm just curious." />
+            <MultiChipSelect label="What kind of art do you love?" options={SKILL_OPTIONS} values={a.strengths}
+              onChange={v => set("strengths", v)} max={3} />
+          </>
+        )}
+        {isExplorer && step === 3 && (
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 30 }}>🧭</div>
+            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, marginTop: 6 }}>You're in, {a.name || "Explorer"}.</div>
+            <div style={{ fontFamily: body, fontSize: 13, color: "#5b4630", marginTop: 10, lineHeight: 1.5 }}>
+              Start discovering — check in at real places, complete quests, and earn XP as you actually go explore the scene.
+            </div>
+          </div>
+        )}
+        {!isExplorer && step === 2 && (
           <>
             <FormInput label="What does success actually look like to you?" value={a.missionText} onChange={v => set("missionText", v)} area
               placeholder="e.g. I want to quit my day job. I want gallery representation. I want museum shows." />
@@ -2373,7 +2423,7 @@ function Onboarding_({ onFinish }) {
             <FormInput label="Target income this period ($)" value={a.targetAmount} onChange={v => set("targetAmount", v)} type="number" placeholder="100000" />
           </>
         )}
-        {step === 2 && (
+        {!isExplorer && step === 3 && (
           <>
             <MultiChipSelect label="What are you already strong in?" options={SKILL_OPTIONS} values={a.strengths}
               onChange={v => set("strengths", v)} max={3} />
@@ -2384,14 +2434,14 @@ function Onboarding_({ onFinish }) {
             </div>
           </>
         )}
-        {step === 3 && (
+        {!isExplorer && step === 4 && (
           <>
             <ChipSelect label="Do you currently work a day job?" options={[{ key: "yes", label: "Yes" }, { key: "no", label: "No" }]}
               value={a.hasDayJob === true ? "yes" : a.hasDayJob === false ? "no" : ""} onChange={v => set("hasDayJob", v === "yes")} />
             <FormInput label="Realistic hours per week for your art" value={a.weeklyHours} onChange={v => set("weeklyHours", v)} type="number" placeholder="e.g. 15" />
           </>
         )}
-        {step === 4 && (
+        {!isExplorer && step === 5 && (
           <>
             <FormInput label="Finished works you have right now" value={a.finishedWorks} onChange={v => set("finishedWorks", v)} type="number" placeholder="e.g. 12" />
             <FormInput label="Solo shows to date" value={a.soloShows} onChange={v => set("soloShows", v)} type="number" placeholder="e.g. 0" />
@@ -2402,7 +2452,7 @@ function Onboarding_({ onFinish }) {
             </div>
           </>
         )}
-        {step === 5 && previewLevel && (
+        {!isExplorer && step === 6 && previewLevel && (
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 30 }}>🎉</div>
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, marginTop: 6 }}>
@@ -2424,8 +2474,8 @@ function Onboarding_({ onFinish }) {
               background: "transparent", color: T.textDark, fontFamily: head, fontWeight: 700, fontSize: 13 }}>Back</button>
           )}
           {step < steps.length - 1 ? (
-            <button onClick={next} style={{ flex: 2, padding: 13, borderRadius: 11, border: "none",
-              background: T.gold, color: T.ink, fontFamily: head, fontWeight: 800, fontSize: 14 }}>Continue</button>
+            <button onClick={next} disabled={step === 0 && !a.playerMode} style={{ flex: 2, padding: 13, borderRadius: 11, border: "none",
+              background: (step === 0 && !a.playerMode) ? "#00000022" : T.gold, color: T.ink, fontFamily: head, fontWeight: 800, fontSize: 14 }}>Continue</button>
           ) : (
             <button onClick={() => onFinish(a)} style={{ flex: 2, padding: 13, borderRadius: 11, border: "none",
               background: T.green, color: "#fff", fontFamily: head, fontWeight: 800, fontSize: 14 }}>Enter your world →</button>
