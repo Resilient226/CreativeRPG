@@ -11,7 +11,7 @@ import { applyInteraction, groupPeopleBy, clampStat, normalizeTrainingNpc } from
 import { loadNpc } from "./training/data";
 import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, clampZoom, computeTier, buildDistricts, DISTRICT_LAYOUT } from "./engines/mapEngine";
 import { DEFAULT_HOME_BASE, geocodeAddress } from "./engines/geoEngine";
-import { buildUpcomingDeadlines, isUrgentDeadline } from "./engines/calendarEngine";
+import { buildUpcomingDeadlines, isUrgentDeadline, consolidateByTitle, filterDeadlines } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
 import { driftNpcOverTime, generatePublicProfile } from "./engines/npcEngine";
@@ -367,7 +367,10 @@ export default function CreativeEmpireOS() {
       setProfile(savedProfile);
       const save = await loadSave();
       if (save) {
-        if (save.quests) setQuests(save.quests);
+        // One-time cleanup: earlier versions could generate a broken "Apply: undefined"
+        // quest when tracking a real opportunity (a missing title→name alias). This
+        // removes any already-created instance rather than leaving it stuck forever.
+        if (save.quests) setQuests(save.quests.filter(q => q.title !== "Apply: undefined"));
         if (save.confidence) setConfidence(save.confidence);
         if (save.goal) setGoal(save.goal);
         if (save.places) setPlaces(save.places);
@@ -413,7 +416,7 @@ export default function CreativeEmpireOS() {
             setOpps(prev => {
               const existingIds = new Set(prev.map(o => o.id));
               const fresh = data.opportunities.filter(o => !existingIds.has(o.id))
-                .map(o => ({ ...o, tag: o.category, note: o.description, budget: o.cost, sourceUrl: "", source: "ArtsATL" }));
+                .map(o => ({ ...o, name: o.title, tag: o.category, note: o.description, budget: o.cost, sourceUrl: "", source: "ArtsATL" }));
               if (fresh.length) flash(`${fresh.length} new real opportunit${fresh.length === 1 ? "y" : "ies"} found.`);
               return [...prev, ...fresh];
             });
@@ -989,18 +992,56 @@ function Inventory_({ inventory, setInventory, onBack, flash }) {
 
 /* ================= CALENDAR (upcoming list — not a month grid, see note) ================= */
 function Calendar_({ quests, events, onBack }) {
-  const items = buildUpcomingDeadlines({ quests, events });
+  const [query, setQuery] = useState("");
+  const [range, setRange] = useState("all");
+  const RANGE_OPTIONS = [
+    { key: "all", label: "All", minDays: null, maxDays: null },
+    { key: "week", label: "Next 7 days", minDays: null, maxDays: 7 },
+    { key: "month", label: "Next 30 days", minDays: null, maxDays: 30 },
+    { key: "later", label: "Beyond 30 days", minDays: 31, maxDays: null },
+  ];
+  const activeRange = RANGE_OPTIONS.find(r => r.key === range) || RANGE_OPTIONS[0];
+
+  const raw = buildUpcomingDeadlines({ quests, events });
+  const consolidated = consolidateByTitle(raw);
+  const items = filterDeadlines(consolidated, { query, minDays: activeRange.minDays, maxDays: activeRange.maxDays });
+
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream, fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "16px 14px 40px" }}>
       <BackHeader title="📅 Calendar" onBack={onBack} />
-      <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, margin: "10px 2px 14px" }}>
-        Upcoming, soonest first. (A full month grid isn't built yet — this is the honest, useful version for now.)
+      <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, margin: "10px 2px 12px" }}>
+        Upcoming, soonest first, duplicates merged. (A full month grid isn't built yet — this is the honest, useful version for now.)
       </div>
-      {items.length === 0 && <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>Nothing with a deadline right now.</div>}
+
+      <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by name or category…"
+        style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 10, padding: "10px 12px",
+          color: "#EDE7D9", fontFamily: body, fontSize: 13, outline: "none", marginBottom: 10 }} />
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        {RANGE_OPTIONS.map(r => (
+          <button key={r.key} onClick={() => setRange(r.key)} style={{ padding: "6px 12px", borderRadius: 20,
+            border: `1.5px solid ${T.gold}`, background: range === r.key ? T.gold : "transparent",
+            color: range === r.key ? T.ink : T.textCream, fontFamily: head, fontWeight: 700, fontSize: 11 }}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      {items.length === 0 && (
+        <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>
+          {raw.length === 0 ? "Nothing with a deadline right now." : "Nothing matches that search/filter."}
+        </div>
+      )}
       {items.map((it, i) => (
         <Scroll key={i} style={{ padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14 }}>{it.label}</div>
+            <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+              {it.label}
+              {it.count > 1 && (
+                <span style={{ fontFamily: body, fontSize: 9.5, fontWeight: 700, color: T.gold, background: "#00000030",
+                  padding: "1px 6px", borderRadius: 10 }}>×{it.count}</span>
+              )}
+            </div>
             <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{it.sub}</div>
           </div>
           <div style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: isUrgentDeadline(it.days) ? T.rose : T.gold }}>{it.raw}</div>
