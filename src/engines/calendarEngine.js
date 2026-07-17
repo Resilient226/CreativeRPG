@@ -40,3 +40,39 @@ export function buildUpcomingDeadlines({ quests = [], events = [], limit } = {})
 export function isUrgentDeadline(days, threshold = 5) {
   return days != null && days <= threshold;
 }
+
+/**
+ * Merges items that share the same title (case/whitespace-insensitive) into one
+ * entry — e.g. the same real opportunity tracked twice, or a quest and an event
+ * both referencing the same thing. Keeps the SOONEST date among duplicates (never
+ * the stalest), and tags how many were merged so the UI can show "×2" honestly
+ * instead of silently hiding that a merge happened.
+ */
+export function consolidateByTitle(items) {
+  const groups = new Map();
+  items.forEach(item => {
+    const key = (item.label || "").trim().toLowerCase();
+    const existing = groups.get(key);
+    if (!existing) { groups.set(key, { ...item, count: 1 }); return; }
+    const itemIsSooner = (item.days ?? Infinity) < (existing.days ?? Infinity);
+    groups.set(key, { ...existing, days: itemIsSooner ? item.days : existing.days,
+      raw: itemIsSooner ? item.raw : existing.raw, count: existing.count + 1 });
+  });
+  return Array.from(groups.values()).sort((a, b) => (a.days ?? 9999) - (b.days ?? 9999));
+}
+
+/**
+ * Filters by a name/category text search and/or a day-range window. Items with no
+ * parseable deadline always pass the date filters (never hidden just because we
+ * couldn't parse a date) — same "never silently disappear" rule as the rest of
+ * this engine.
+ */
+export function filterDeadlines(items, { query = "", minDays = null, maxDays = null } = {}) {
+  const q = query.trim().toLowerCase();
+  return items.filter(item => {
+    const matchesQuery = !q || (item.label || "").toLowerCase().includes(q) || (item.sub || "").toLowerCase().includes(q);
+    const matchesMin = minDays == null || item.days == null || item.days >= minDays;
+    const matchesMax = maxDays == null || item.days == null || item.days <= maxDays;
+    return matchesQuery && matchesMin && matchesMax;
+  });
+}
