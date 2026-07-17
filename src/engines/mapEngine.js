@@ -12,11 +12,13 @@
 import { KNOWN_LOCATIONS, jitterNearBase } from "./geoEngine";
 
 /* ---------------- LOD thresholds, now real MapLibre zoom levels (roughly 0-22) ----------------
-   ZOOM_MIN is deliberately raised to real neighborhood scale (14 ≈ several blocks visible,
-   not a whole city) — "lock gameplay to a neighborhood/street scale" means the camera
-   should be structurally incapable of zooming out past that, not just discouraged from it. */
-export const ZOOM_MIN = 14, ZOOM_MAX = 20;
-export const LOD_DISTRICT = 15, LOD_INTERIOR = 17;
+   Compressed further to real street-level scale (16.5+ ≈ Pokémon GO's own zoom scale) —
+   "the default gameplay zoom should never be farther away than this" means the whole
+   range sits close in now, not just the floor. DEFAULT_ZOOM is where the camera
+   actually starts, deliberately tighter than the old district-overview floor. */
+export const ZOOM_MIN = 16.5, ZOOM_MAX = 20;
+export const LOD_DISTRICT = 17, LOD_INTERIOR = 18.5;
+export const DEFAULT_ZOOM = 17.3;
 
 export function clampZoom(z) {
   if (!Number.isFinite(z)) return LOD_DISTRICT;
