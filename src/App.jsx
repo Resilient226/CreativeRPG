@@ -319,6 +319,8 @@ export default function CreativeEmpireOS() {
   const [xp, setXp] = useState(0);
   const [unlockedAchievements, setUnlockedAchievements] = useState([]);
   const [archive, setArchive] = useState([]);
+  const [discoveredLocations, setDiscoveredLocations] = useState([]);
+  const [lastLocationFetch, setLastLocationFetch] = useState(0);
   const [aiNpcMode, setAiNpcMode] = useState(false);
   // AI NPC Mode acts like a genuinely separate world: generated people/businesses are
   // never deleted when the mode is off (toggling back on restores them exactly as
@@ -391,6 +393,8 @@ export default function CreativeEmpireOS() {
         if (typeof save.xp === "number") setXp(save.xp);
         if (save.unlockedAchievements) setUnlockedAchievements(save.unlockedAchievements);
         if (save.archive) setArchive(save.archive);
+        if (save.discoveredLocations) setDiscoveredLocations(save.discoveredLocations);
+        if (typeof save.lastLocationFetch === "number") setLastLocationFetch(save.lastLocationFetch);
         // Lazy catch-up for practice partners: drift their career state by however
         // much real time passed since last visit — deterministic, so this never
         // reshuffles a personality, only advances it. Real contacts are untouched;
@@ -429,6 +433,25 @@ export default function CreativeEmpireOS() {
         } catch { /* network hiccup — the game still works, just skips today's fetch */ }
       }
 
+      // Same lazy daily catch-up for real locations (galleries/museums/public art)
+      // via OpenStreetMap's Overpass API — genuinely automatic, not manual research.
+      const lastLocFetch = save?.lastLocationFetch || 0;
+      if (Date.now() - lastLocFetch > 20 * 60 * 60 * 1000) {
+        try {
+          const res = await fetch("/api/fetch-locations");
+          const data = await res.json();
+          if (data?.locations?.length) {
+            setDiscoveredLocations(prev => {
+              const existingIds = new Set(prev.map(l => l.id));
+              const fresh = data.locations.filter(l => !existingIds.has(l.id));
+              if (fresh.length) flash(`${fresh.length} new real location${fresh.length === 1 ? "" : "s"} discovered.`);
+              return [...prev, ...fresh];
+            });
+          }
+          setLastLocationFetch(Date.now());
+        } catch { /* network hiccup — skips today's discovery, tries again next login */ }
+      }
+
       setOnboarded(true);
       setLoaded(true);
     })();
@@ -458,9 +481,9 @@ export default function CreativeEmpireOS() {
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, lastSeen: Date.now() })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch, lastSeen: Date.now() })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch]);
 
   // Career Director: reads across the other engines and decides what the Command
   // Board should show — re-scoring existing quests and proposing new ones from real
@@ -771,9 +794,11 @@ export default function CreativeEmpireOS() {
     closeAdd();
   }
 
+  const DISCOVERY_ICON = { gallery: Palette, museum: Landmark, public_art: ImageIcon };
   const allNodes = [
     ...visibleContacts, ...visiblePlaces, ...events,
     ...opps.map(o => ({ ...o, kind: "opportunity" })),
+    ...discoveredLocations.map(l => ({ ...l, kind: "place", icon: DISCOVERY_ICON[l.category] || Palette, color: T.forestLight, discovered: true, name: l.name })),
     { id: "ideas-hub", kind: "idea", name: "Ideas", icon: Lightbulb, color: T.gold, pos: { x: 46, y: 40 } },
   ];
 
@@ -831,7 +856,7 @@ export default function CreativeEmpireOS() {
 
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream,
-      fontFamily: body, maxWidth: 480, margin: "0 auto", position: "relative", paddingBottom: 84 }}>
+      fontFamily: body, maxWidth: 480, margin: "0 auto", position: "relative", paddingBottom: tab === "map" ? 0 : 84 }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -843,10 +868,15 @@ export default function CreativeEmpireOS() {
       {tab === "home" && <Home_ quests={quests} goal={goal} energy={energy} onToggle={toggleQuest} onViewAll={() => setTab("quests")} profile={profile} levels={levels} playerMode={playerMode} xp={xp} />}
       {tab === "quests" && <Quests_ quests={quests} onToggle={toggleQuest} />}
       {tab === "map" && (
-        <MapScreen_
-          nodes={allNodes} quests={quests} events={events} energy={energy}
-          onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
-        />
+        // Full viewport, edge to edge — the map is the primary interface now, not
+        // content sitting inside the usual padded screen area. The bottom nav still
+        // renders (fixed, below), floating semi-transparently on top of it.
+        <div style={{ position: "fixed", inset: 0, maxWidth: 480, margin: "0 auto" }}>
+          <MapScreen_
+            nodes={allNodes} quests={quests} events={events} energy={energy}
+            onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
+          />
+        </div>
       )}
       {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels}
         generatedCount={contacts.filter(c => c.sim || c.generatedByAiMode).length + places.filter(p => p.generatedByAiMode).length}
@@ -873,7 +903,9 @@ export default function CreativeEmpireOS() {
 
       <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 480, margin: "0 auto",
         display: "flex", alignItems: "center", justifyContent: "space-around",
-        background: `linear-gradient(180deg, ${T.wood}, ${T.ink})`, borderTop: `3px solid ${T.gold}`,
+        background: tab === "map" ? "#00000070" : `linear-gradient(180deg, ${T.wood}, ${T.ink})`,
+        backdropFilter: tab === "map" ? "blur(10px)" : "none",
+        borderTop: tab === "map" ? "1px solid #ffffff22" : `3px solid ${T.gold}`,
         padding: "10px 8px calc(10px + env(safe-area-inset-bottom, 0px))" }}>
         <NavBtn icon={HomeIcon} label="Home" active={tab === "home"} onClick={() => setTab("home")} />
         <NavBtn icon={Swords} label="Quests" active={tab === "quests"} onClick={() => setTab("quests")} />
@@ -1296,125 +1328,114 @@ function MiniStep({ icon: Icon, label }) {
 function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0 }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
+  const [showList, setShowList] = useState(false); // minimal UI: the deadlines/level panel is collapsed by default
   const visible = nodes.filter(n => filter === "all" || n.kind === filter || (filter === "idea" && n.kind === "idea"));
   const peopleOnly = nodes.filter(n => n.kind === "person");
 
   const deadlineItems = buildUpcomingDeadlines({ quests, events, limit: 2 });
-
   const urgentEvent = events.find(e => e.requirements && isAtRisk(e.requirements, e.daysLeft));
   const lowEnergy = energy <= 3;
+  const profileLevel = computeProfileLevel(xp);
 
-  // Group people by met-context or by connections. Simple text matching — not real AI reasoning,
-  // just a grouping the app can do consistently while you decide if it's useful.
-  // grouping logic now lives in ./engines/relationshipEngine.js (groupPeopleBy)
+  // grouping logic lives in ./engines/relationshipEngine.js (groupPeopleBy)
+
+  if (filter === "person" && organizeBy !== "map") {
+    return (
+      <div style={{ minHeight: "100vh", background: T.ink, padding: "16px 14px" }}>
+        <button onClick={() => setOrganizeBy("map")} style={{ background: "none", border: "none",
+          fontFamily: head, fontWeight: 700, fontSize: 13, color: T.gold, marginBottom: 12 }}>← Back to map</button>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {[["met", "🤝 Where Met"], ["connections", "🔗 Connections"]].map(([key, label]) => (
+            <button key={key} onClick={() => setOrganizeBy(key)} style={{ flex: 1, padding: "7px 0", borderRadius: 20,
+              border: `1.5px solid ${T.gold}`, background: organizeBy === key ? T.gold : T.panel,
+              color: organizeBy === key ? T.ink : T.textCream, fontFamily: head, fontSize: 10.5, fontWeight: 700 }}>{label}</button>
+          ))}
+        </div>
+        {groupPeopleBy(peopleOnly, organizeBy).map(([groupName, people]) => (
+          <div key={groupName} style={{ marginBottom: 14 }}>
+            <div style={{ fontFamily: head, fontWeight: 700, fontSize: 12.5, color: T.goldBright, marginBottom: 6 }}>
+              {organizeBy === "met" ? "📍" : "🔗"} {groupName}
+            </div>
+            {people.map(p => {
+              const Icon = p.icon;
+              return (
+                <button key={p.id} onClick={() => onSelect(p)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10,
+                  background: T.panel, border: `1.5px solid ${p.color}`, borderRadius: 12, padding: "9px 11px", marginBottom: 7 }}>
+                  <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#fffaf0", border: `2px solid ${p.color}`,
+                    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={13} color={p.color} /></div>
+                  <div style={{ textAlign: "left", flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: head, fontWeight: 700, fontSize: 12.5, color: T.textCream }}>{p.name}</div>
+                    <div style={{ fontFamily: body, fontSize: 10, color: T.textMuted }}>{p.type}</div>
+                  </div>
+                  <ChevronRight size={15} color={T.textMuted} />
+                </button>
+              );
+            })}
+          </div>
+        ))}
+        {peopleOnly.length === 0 && (
+          <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>No people added yet.</div>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div>
-      <div style={{ padding: "16px 14px 8px" }}>
-        <div style={{ fontFamily: head, fontWeight: 800, fontSize: 20 }}>🗺️ Your World</div>
-        <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted }}>Tap anyone or anything for the full picture.</div>
+    <div style={{ position: "relative", height: "100%", width: "100%" }}>
+      {/* the map itself — full-screen, edge to edge, the primary interface now */}
+      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} />
+
+      {/* minimal floating UI on top — collapsed by default so the city stays the focus */}
+      <div style={{ position: "absolute", top: 10, left: 10, right: 10, display: "flex", justifyContent: "space-between", pointerEvents: "none" }}>
+        <button onClick={() => setShowList(s => !s)} style={{ pointerEvents: "auto", background: "#00000090", backdropFilter: "blur(6px)",
+          border: "1px solid #ffffff22", borderRadius: 20, padding: "6px 12px", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontFamily: head, fontWeight: 800, fontSize: 12, color: T.goldBright }}>Lv {profileLevel.level}</span>
+          {(urgentEvent || lowEnergy) && <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.rose }} />}
+        </button>
+        <div style={{ display: "flex", gap: 6, pointerEvents: "auto" }}>
+          {FILTERS.map(f => (
+            <button key={f.key} onClick={() => { setFilter(f.key); if (f.key !== "person") setOrganizeBy("map"); }}
+              style={{ width: 30, height: 30, borderRadius: "50%", background: filter === f.key ? f.color : "#00000090",
+                backdropFilter: "blur(6px)", border: `1.5px solid ${f.color}`, display: "flex", alignItems: "center", justifyContent: "center" }}
+              title={f.label} />
+          ))}
+        </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, padding: "0 14px" }}>
-        <WoodPanel style={{ flex: 1, padding: "8px 10px" }}>
-          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, color: T.gold }}>LEVEL</div>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 16 }}>{computeProfileLevel(xp).level}</div>
-          <div style={{ fontFamily: body, fontSize: 9, color: T.textMuted }}>
-            {computeProfileLevel(xp).xpForNextLevel != null ? `${computeProfileLevel(xp).xpForNextLevel - computeProfileLevel(xp).xpIntoLevel} XP to next` : "Max level"}
+      {showList && (
+        <div style={{ position: "absolute", top: 52, left: 10, right: 10, background: "#00000090", backdropFilter: "blur(6px)",
+          border: "1px solid #ffffff22", borderRadius: 14, padding: 12 }}>
+          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, color: T.goldBright, marginBottom: 4 }}>
+            NEAREST DEADLINES · {profileLevel.xpForNextLevel != null ? `${profileLevel.xpForNextLevel - profileLevel.xpIntoLevel} XP to next level` : "Max level"}
           </div>
-        </WoodPanel>
-        <Scroll style={{ flex: 2, padding: "8px 10px" }}>
-          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1 }}>NEAREST DEADLINES</div>
-          {deadlineItems.length === 0 && <div style={{ fontFamily: body, fontSize: 11, marginTop: 2 }}>Nothing urgent.</div>}
+          {deadlineItems.length === 0 && <div style={{ fontFamily: body, fontSize: 11, color: "#fff" }}>Nothing urgent.</div>}
           {deadlineItems.map((d, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 11, fontWeight: 700, marginTop: 2 }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 150 }}>{d.label}</span>
-              <span style={{ color: isUrgentDeadline(d.days) ? T.rose : T.textDark }}>{d.days != null ? `${d.days}d` : d.raw}</span>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 11, fontWeight: 700, color: "#fff", marginTop: 2 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{d.label}</span>
+              <span style={{ color: isUrgentDeadline(d.days) ? T.rose : T.goldBright }}>{d.days != null ? `${d.days}d` : d.raw}</span>
             </div>
           ))}
-        </Scroll>
-      </div>
-
-      {(urgentEvent || lowEnergy) && (
-        <div style={{ margin: "8px 14px 0", display: "flex", flexDirection: "column", gap: 6 }}>
           {urgentEvent && (() => {
             const { met, total } = computeReadiness(urgentEvent.requirements);
             return (
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#5a1c14", border: `2px solid ${T.rose}`,
-                borderRadius: 12, padding: "9px 11px" }}>
-                <AlertTriangle size={16} color="#ffb4a8" style={{ flexShrink: 0, marginTop: 1 }} />
-                <div style={{ fontFamily: body, fontSize: 11.5, color: "#ffe2dc", lineHeight: 1.4 }}>
-                  <b>Consider pivoting:</b> at this pace you may miss <b>{urgentEvent.name}</b> ({urgentEvent.daysLeft} days left,
-                  only {met}/{total} requirements met).
-                </div>
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #ffffff22", fontFamily: body, fontSize: 11, color: "#ffb4a8" }}>
+                ⚠️ May miss <b>{urgentEvent.name}</b> — {met}/{total} requirements, {urgentEvent.daysLeft}d left.
               </div>
             );
           })()}
           {lowEnergy && (
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#3a2a10", border: `2px solid ${T.gold}`,
-              borderRadius: 12, padding: "9px 11px" }}>
-              <Zap size={16} color={T.goldBright} style={{ flexShrink: 0, marginTop: 1 }} />
-              <div style={{ fontFamily: body, fontSize: 11.5, color: T.textCream }}>Energy is low — consider a lighter day before your next big push.</div>
-            </div>
+            <div style={{ marginTop: 6, fontFamily: body, fontSize: 11, color: T.goldBright }}>⚡ Energy is low.</div>
           )}
         </div>
       )}
-
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "12px 14px 0" }}>
-        {FILTERS.map(f => (
-          <button key={f.key} onClick={() => { setFilter(f.key); if (f.key !== "person") setOrganizeBy("map"); }} style={{ display: "flex", alignItems: "center", gap: 5,
-            padding: "6px 11px", borderRadius: 20, background: filter === f.key ? f.color : T.panel,
-            border: `1.5px solid ${f.color}`, color: filter === f.key ? T.ink : T.textCream }}>
-            <span style={{ fontFamily: head, fontSize: 11, fontWeight: 700 }}>{f.label}</span>
-          </button>
-        ))}
-      </div>
 
       {filter === "person" && (
-        <div style={{ margin: "10px 14px 0" }}>
-          <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: T.textMuted, marginBottom: 6 }}>ORGANIZE BY</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[["map", "📍 Map"], ["met", "🤝 Where Met"], ["connections", "🔗 Connections"]].map(([key, label]) => (
-              <button key={key} onClick={() => setOrganizeBy(key)} style={{ flex: 1, padding: "7px 0", borderRadius: 20,
-                border: `1.5px solid ${T.gold}`, background: organizeBy === key ? T.gold : T.panel,
-                color: organizeBy === key ? T.ink : T.textCream, fontFamily: head, fontSize: 10.5, fontWeight: 700 }}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {filter === "person" && organizeBy !== "map" ? (
-        <div style={{ margin: "12px 14px 0" }}>
-          {groupPeopleBy(peopleOnly, organizeBy).map(([groupName, people]) => (
-            <div key={groupName} style={{ marginBottom: 14 }}>
-              <div style={{ fontFamily: head, fontWeight: 700, fontSize: 12.5, color: T.goldBright, marginBottom: 6 }}>
-                {organizeBy === "met" ? "📍" : "🔗"} {groupName}
-              </div>
-              {people.map(p => {
-                const Icon = p.icon;
-                return (
-                  <button key={p.id} onClick={() => onSelect(p)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10,
-                    background: T.panel, border: `1.5px solid ${p.color}`, borderRadius: 12, padding: "9px 11px", marginBottom: 7 }}>
-                    <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#fffaf0", border: `2px solid ${p.color}`,
-                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={13} color={p.color} /></div>
-                    <div style={{ textAlign: "left", flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: head, fontWeight: 700, fontSize: 12.5, color: T.textCream }}>{p.name}</div>
-                      <div style={{ fontFamily: body, fontSize: 10, color: T.textMuted }}>{p.type}</div>
-                    </div>
-                    <ChevronRight size={15} color={T.textMuted} />
-                  </button>
-                );
-              })}
-            </div>
+        <div style={{ position: "absolute", top: 52, right: 10, display: "flex", gap: 6 }}>
+          {[["met", "🤝"], ["connections", "🔗"]].map(([key, emoji]) => (
+            <button key={key} onClick={() => setOrganizeBy(key)} style={{ width: 30, height: 30, borderRadius: "50%",
+              background: "#00000090", backdropFilter: "blur(6px)", border: `1px solid ${T.gold}`, fontSize: 13 }}>{emoji}</button>
           ))}
-          {peopleOnly.length === 0 && (
-            <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 20 }}>No people added yet.</div>
-          )}
         </div>
-      ) : (
-        <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} />
       )}
     </div>
   );
@@ -1447,6 +1468,119 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
 // real browser.
 const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
+/** Real local time drives a genuine day/night palette swap — not a shader, a
+ *  real-time color choice, which achieves the feeling honestly. */
+function isNightNow() {
+  const h = new Date().getHours();
+  return h < 6 || h >= 19;
+}
+
+const ART_DISTRICT_PALETTE = {
+  night: { bg: "#0d1420", building: "#2a2440", road: "#4a2f28", roadMinor: "#3a2420", water: "#0a1830", land: "#101a14", label: "#e8c98a", halo: "#000000" },
+  day: { bg: "#3a2a24", building: "#5a4438", road: "#8a5238", roadMinor: "#6a3f2c", water: "#1a3040", land: "#2a3a24", label: "#fff2d8", halo: "#1a1008" },
+};
+
+/**
+ * Re-paints the loaded base style into the dark "Art District" theme — warm brick
+ * streets, dark backdrop, warm building tones — by walking every layer and
+ * matching on TYPE and a loose name pattern, not hardcoded exact layer IDs. This is
+ * deliberately defensive (try/catch per layer): OpenFreeMap's exact style JSON
+ * can't be inspected from this sandboxed environment, so this needs real-device
+ * confirmation, not just a syntax check, before it's trusted to look right.
+ */
+function applyArtDistrictTheme(map, night) {
+  const p = night ? ART_DISTRICT_PALETTE.night : ART_DISTRICT_PALETTE.day;
+  const style = map.getStyle();
+  if (!style || !style.layers) return;
+  style.layers.forEach(layer => {
+    try {
+      if (layer.type === "background") map.setPaintProperty(layer.id, "background-color", p.bg);
+      else if (layer.type === "fill" && /water|ocean|sea|lake|river/i.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", p.water);
+      else if (layer.type === "fill" && /(landuse|park|grass|wood|forest|golf|pitch)/i.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", p.land);
+      else if (layer.type === "fill-extrusion") map.setPaintProperty(layer.id, "fill-extrusion-color", p.building);
+      else if (layer.type === "line" && /(motorway|trunk|primary|highway)/i.test(layer.id)) map.setPaintProperty(layer.id, "line-color", p.road);
+      else if (layer.type === "line" && /(road|street|secondary|tertiary|minor)/i.test(layer.id)) map.setPaintProperty(layer.id, "line-color", p.roadMinor);
+      else if (layer.type === "symbol") {
+        map.setPaintProperty(layer.id, "text-color", p.label);
+        map.setPaintProperty(layer.id, "text-halo-color", p.halo);
+      }
+    } catch { /* this layer doesn't support this paint property — skip it, don't break the rest */ }
+  });
+}
+
+/**
+ * Adds real 3D building extrusion if the loaded style has vector building data —
+ * OpenFreeMap's Liberty style is built on the standard OpenMapTiles schema, where
+ * a "building" source-layer with render_height is typical. Also defensive for the
+ * same reason as the theme function: unverifiable from this sandbox, needs a real
+ * device to confirm buildings actually extrude with real height data vs. the
+ * generic fallback height.
+ */
+function addBuildingExtrusion(map, night) {
+  if (map.getLayer("art-district-buildings-3d")) return;
+  try {
+    const sources = map.getStyle().sources || {};
+    const vectorSourceId = Object.keys(sources).find(id => sources[id].type === "vector");
+    if (!vectorSourceId) return;
+    map.addLayer({
+      id: "art-district-buildings-3d", type: "fill-extrusion", source: vectorSourceId, "source-layer": "building",
+      paint: {
+        "fill-extrusion-color": night ? ART_DISTRICT_PALETTE.night.building : ART_DISTRICT_PALETTE.day.building,
+        "fill-extrusion-height": ["coalesce", ["get", "render_height"], 8],
+        "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+        "fill-extrusion-opacity": 0.92,
+      },
+    });
+  } catch { /* this style's source-layer naming may differ from the OpenMapTiles assumption */ }
+}
+
+/* ---------------- custom category markers — designed shapes, not generic pins ---------------- */
+const MARKER_ANIMATIONS = `
+  @keyframes markerGlowPulse { 0%,100% { box-shadow: 0 0 8px 2px var(--glow), 0 0 2px 0 #fff8; } 50% { box-shadow: 0 0 20px 8px var(--glow), 0 0 4px 1px #fff8; } }
+  @keyframes markerBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+  @keyframes markerShimmer { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.4); } }
+`;
+const CATEGORY_MARKER_STYLE = {
+  gallery: { shape: "diamond", glow: "#D9A441", emoji: "🖼️" },
+  museum: { shape: "column", glow: "#5B8FD9", emoji: "🏛️" },
+  public_art: { shape: "blob", glow: "#C25BD9", emoji: "🎨" },
+  venue: { shape: "circle", glow: "#E0955B", emoji: "☕" },
+  milestone: { shape: "star", glow: "#F0567A", emoji: "🎉" },
+  collectible: { shape: "hex", glow: "#5BD9B0", emoji: "✨" },
+};
+function CustomCategoryMarker({ category, onClick, label }) {
+  const style = CATEGORY_MARKER_STYLE[category] || CATEGORY_MARKER_STYLE.gallery;
+  const shapeStyle = {
+    diamond: { borderRadius: 6, transform: "rotate(45deg)" },
+    column: { borderRadius: "4px 4px 0 0" },
+    blob: { borderRadius: "60% 40% 55% 45% / 50% 60% 40% 50%" },
+    circle: { borderRadius: "50%" },
+    star: { borderRadius: "30%", transform: "rotate(15deg)" },
+    hex: { clipPath: "polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0% 50%)" },
+  }[style.shape];
+  const animation = category === "milestone" ? "markerGlowPulse 1.6s ease-in-out infinite"
+    : category === "collectible" ? "markerBob 2s ease-in-out infinite, markerShimmer 1.8s ease-in-out infinite"
+    : "markerGlowPulse 3s ease-in-out infinite";
+  return (
+    <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+      <style>{MARKER_ANIMATIONS}</style>
+      <div style={{ "--glow": style.glow, width: 34, height: 34, background: "#1a1420ee", border: `2px solid ${style.glow}`,
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, animation, ...shapeStyle }}>
+        <span style={{ transform: style.shape === "diamond" || style.shape === "star" ? "rotate(-45deg)" : "none" }}>{style.emoji}</span>
+      </div>
+      {label && <div style={{ background: "#000000b0", borderRadius: 5, padding: "1px 6px", fontFamily: head, fontSize: 8, color: "#fff", maxWidth: 76, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>}
+    </button>
+  );
+}
+
+function getMarkerCategory(e) {
+  if (e.category === "gallery" || e.category === "museum" || e.category === "public_art") return e.category;
+  if (e.kind === "milestone") return "milestone";
+  if (e.isCollectible) return "collectible";
+  if (typeof e.category === "string" && e.category.toLowerCase() === "venue") return "venue";
+  return null; // no custom category marker for this entity — falls back to the existing EntityPin
+}
+
 function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -1454,35 +1588,55 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
   const [zoom, setZoom] = useState(LOD_DISTRICT - 1);
   const [interior, setInterior] = useState(null);
   const [mapReady, setMapReady] = useState(false);
+  const [night, setNight] = useState(isNightNow());
 
   const districts = useMemo(() => buildDistricts(nodes, homeBase), [nodes, homeBase]);
   const tier = computeTier(zoom, interior);
 
-  // Initialize the real map exactly once. Centered on the player's actual home base
-  // (real geolocation, with an Atlanta fallback — see the App-level homeBase state).
+  // Initialize the real map exactly once. Tilted camera (pitch) makes this feel like
+  // a living city, not a flat navigation map. Centered on the player's actual home
+  // base (real geolocation, with an Atlanta fallback).
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: containerRef.current, style: MAP_STYLE_URL,
-      center: [homeBase.lng, homeBase.lat], zoom: LOD_DISTRICT - 1, attributionControl: false,
+      center: [homeBase.lng, homeBase.lat], zoom: LOD_DISTRICT - 1,
+      pitch: 55, attributionControl: false,
     });
     map.on("zoom", () => setZoom(map.getZoom()));
-    map.on("load", () => setMapReady(true));
+    map.on("load", () => {
+      setMapReady(true);
+      applyArtDistrictTheme(map, isNightNow());
+      addBuildingExtrusion(map, isNightNow());
+    });
     mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function flyTo(lng, lat, targetZoom) {
-    mapRef.current?.flyTo({ center: [lng, lat], zoom: targetZoom, duration: 500 });
+  // Real-time day/night check — re-applies the palette if the hour actually changes
+  // while the app is open (checked every 5 minutes, not a continuous shader).
+  useEffect(() => {
+    const id = setInterval(() => {
+      const n = isNightNow();
+      setNight(prevNight => {
+        if (n !== prevNight && mapRef.current) applyArtDistrictTheme(mapRef.current, n);
+        return n;
+      });
+    }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  function flyTo(lng, lat, targetZoom, pitch) {
+    mapRef.current?.flyTo({ center: [lng, lat], zoom: targetZoom, pitch: pitch ?? mapRef.current.getPitch(), duration: 600 });
   }
   function returnToDistrictView() {
     setInterior(null);
-    flyTo(homeBase.lng, homeBase.lat, LOD_DISTRICT - 1);
+    flyTo(homeBase.lng, homeBase.lat, LOD_DISTRICT - 1, 25); // flatter overview pitch at district tier
   }
   function enterEntity(e) {
     if (e.kind === "idea") { onShowIdeas(); return; }
-    flyTo(e.lng, e.lat, LOD_INTERIOR + 0.5);
+    flyTo(e.lng, e.lat, LOD_INTERIOR + 0.5, 60); // steeper, more immersive tilt up close
     setInterior(e);
   }
 
@@ -1500,14 +1654,17 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
       d.entities.forEach(e => {
         const el = document.createElement("div");
         const root = ReactDOM.createRoot(el);
+        const markerCategory = getMarkerCategory(e);
         if (tier === "district") {
           // District tier: a small color-coded dot per category — real geography
           // doesn't have floating fictional circles, but the category/count concept
           // is preserved as color + the legend panel below, not silently dropped.
           root.render(
-            <button onClick={() => flyTo(e.lng, e.lat, LOD_DISTRICT + 3)} style={{ width: 16, height: 16, borderRadius: "50%",
+            <button onClick={() => flyTo(e.lng, e.lat, LOD_DISTRICT + 3, 45)} style={{ width: 16, height: 16, borderRadius: "50%",
               background: dColor, border: "2px solid #fff", boxShadow: "0 1px 4px #0008" }} />
           );
+        } else if (markerCategory) {
+          root.render(<CustomCategoryMarker category={markerCategory} label={e.name} onClick={() => enterEntity(e)} />);
         } else {
           root.render(<EntityPin entity={e} onClick={() => enterEntity(e)} />);
         }
@@ -1519,14 +1676,13 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
   }, [districts, tier, mapReady]);
 
   return (
-    <div style={{ margin: "10px 14px 0", borderRadius: 18, overflow: "hidden", border: `3px solid ${T.wood}`,
-      position: "relative", height: 380, background: "#1a2a44" }}>
+    <div style={{ position: "relative", height: "100%", width: "100%", background: night ? "#0d1420" : "#3a2a24" }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* district-tier legend — the count/label information the old floating circles
           used to carry, now a real overlay panel instead of fictional map geometry */}
       {tier === "district" && (
-        <div style={{ position: "absolute", top: 8, left: 10, background: "#00000090", borderRadius: 10,
+        <div style={{ position: "absolute", top: 52, left: 10, background: "#00000090", backdropFilter: "blur(6px)", borderRadius: 10,
           padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
           {districts.map(d => (
             <div key={d.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1554,7 +1710,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
         </div>
       )}
 
-      <div style={{ position: "absolute", top: 8, right: 10, background: "#00000088", border: "1px solid #ffffff22",
+      <div style={{ position: "absolute", top: 46, right: 10, background: "#00000088", border: "1px solid #ffffff22",
         borderRadius: 8, padding: "3px 9px", fontFamily: head, fontSize: 9.5, fontWeight: 700, color: "#fff" }}>
         {tier === "district" ? "DISTRICT VIEW" : tier === "building" ? "BUILDING VIEW" : "INTERIOR"}
       </div>
