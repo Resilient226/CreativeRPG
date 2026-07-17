@@ -18,7 +18,7 @@ import { KNOWN_LOCATIONS, jitterNearBase } from "./geoEngine";
    actually starts, deliberately tighter than the old district-overview floor. */
 export const ZOOM_MIN = 16.5, ZOOM_MAX = 20;
 export const LOD_DISTRICT = 17, LOD_INTERIOR = 18.5;
-export const DEFAULT_ZOOM = 17.3;
+export const DEFAULT_ZOOM = 18.2;
 
 export function clampZoom(z) {
   if (!Number.isFinite(z)) return LOD_DISTRICT;
