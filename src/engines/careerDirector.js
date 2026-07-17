@@ -152,11 +152,17 @@ export function rankQuests(quests, confidence = {}) {
  * The orchestrator: merges hand-created quests with freshly generated gap-quests,
  * ranks the whole set, and returns what the Command Board should show. Quests marked
  * `done` are passed through untouched (already-completed history isn't re-ranked).
+ *
+ * generateGaps defaults true (Creator mode's existing behavior, unchanged). Explorer
+ * mode passes false — Career-progression gap-quests (finish more work, festival
+ * requirements, low-confidence-pillar nudges) don't apply to someone who isn't
+ * necessarily building a career; Explorer still gets real ranking of whatever
+ * quests genuinely exist, just no career-specific quests invented for them.
  */
-export function runCareerDirector({ quests = [], levels = [], events = [], contacts = [], confidence = {}, trainingNpc = null } = {}) {
+export function runCareerDirector({ quests = [], levels = [], events = [], contacts = [], confidence = {}, trainingNpc = null, generateGaps = true } = {}) {
   const doneQuests = quests.filter(q => q.done);
   const activeExisting = quests.filter(q => !q.done);
-  const gapQuests = generateGapQuests({ levels, events, contacts, confidence, trainingNpc });
+  const gapQuests = generateGaps ? generateGapQuests({ levels, events, contacts, confidence, trainingNpc }) : [];
   const ranked = rankQuests([...activeExisting, ...gapQuests], confidence);
   return [...ranked, ...doneQuests];
 }
