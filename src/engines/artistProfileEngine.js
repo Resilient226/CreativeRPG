@@ -65,6 +65,37 @@ export const BADGE_TIERS = [
   { minLevel: 9, name: "Scene Veteran", icon: "🏆" },
   { minLevel: 11, name: "Legend", icon: "👑" },
 ];
+/* ---------------- Public vs. private profile — the enforced boundary ----------------
+   Real people will eventually see each other's profiles (multi-user platform). This
+   defines EXACTLY what's shareable, on purpose, before that viewing feature exists —
+   not as a filter bolted onto raw data later, where something private could slip
+   through by accident. Anything not explicitly listed here never leaves this function. */
+export function buildPublicProfile({ profile, xp, unlockedAchievements, levels, archive } = {}) {
+  const currentLevel = (levels || []).find(l => l.state === "current");
+  const profileLevel = computeProfileLevel(xp || 0);
+  return {
+    name: profile?.name || "Artist",
+    medium: profile?.medium || "",
+    playerMode: profile?.playerMode || "explorer",
+    participationLevel: profileLevel.level,
+    badge: currentBadge(profileLevel.level),
+    careerLevelTitle: currentLevel?.title || null, // the label only — never the raw
+    // finishedWorks/soloShows/salesnumbers behind it; those stay private.
+    achievements: (unlockedAchievements || []).map(id => ACHIEVEMENTS.find(a => a.id === id)).filter(Boolean)
+      .map(a => ({ name: a.name, description: a.description })),
+    portfolio: (archive || []).filter(e => e.verified && e.type === "exhibited_work").map(e => ({ title: e.title })),
+    // Portfolio deliberately omits the archive entry's free-text `note` — someone
+    // could type a real sale price or other private detail in there, and nothing
+    // told them that field would ever be public. Title only, until a more deliberate
+    // "add a public portfolio description" field exists as its own explicit thing.
+    // Explicitly NEVER included, even by omission-prone refactor: goal ($ target/progress),
+    // confidence meter, financeLog, inventory, quests, onboarding answers (day job,
+    // weekly hours, mission text, timeline, target amount), real contacts. Those are
+    // private by default unless a much more deliberate future feature explicitly
+    // shares one, one at a time.
+  };
+}
+
 export function currentBadge(level) {
   return [...BADGE_TIERS].reverse().find(b => level >= b.minLevel) || BADGE_TIERS[0];
 }
