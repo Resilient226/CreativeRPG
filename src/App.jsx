@@ -15,7 +15,7 @@ import { buildUpcomingDeadlines, isUrgentDeadline, consolidateByTitle, filterDea
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
 import { driftNpcOverTime, generatePublicProfile } from "./engines/npcEngine";
-import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation } from "./engines/artistProfileEngine";
+import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation, ACHIEVEMENTS } from "./engines/artistProfileEngine";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
@@ -344,6 +344,10 @@ export default function CreativeEmpireOS() {
   // onboarded: null = still checking, false = show the onboarding flow, true = show the app.
   const [onboarded, setOnboarded] = useState(null);
   const [profile, setProfile] = useState(null);
+  // Defaults to "creator" — anyone who onboarded before Explorer/Creator existed
+  // never answered this question, and creator is the fuller, backward-compatible
+  // experience they already had.
+  const playerMode = profile?.playerMode || "creator";
   const [skills, setSkills] = useState(() => computeSkills({}));
   const [levels, setLevels] = useState(() => computeLevels({}));
   const [authUser, setAuthUser] = useState(undefined); // undefined = still checking, null = signed out, object = signed in
@@ -465,7 +469,7 @@ export default function CreativeEmpireOS() {
   // quest was toggled done, only when the underlying situation actually changes.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    const directed = runCareerDirector({ quests, levels, events, contacts: visibleContacts, confidence, trainingNpc });
+    const directed = runCareerDirector({ quests, levels, events, contacts: visibleContacts, confidence, trainingNpc, generateGaps: playerMode === "creator" });
     setQuests(prev => {
       const byId = new Map(prev.map(q => [q.id, q]));
       let changed = false;
@@ -485,7 +489,7 @@ export default function CreativeEmpireOS() {
       return changed ? Array.from(byId.values()) : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, onboarded, levels, events, contacts, confidence, trainingNpc, aiNpcMode]);
+  }, [loaded, onboarded, levels, events, contacts, confidence, trainingNpc, aiNpcMode, playerMode]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
 
@@ -836,7 +840,7 @@ export default function CreativeEmpireOS() {
       `}</style>
       <Toast text={toast} />
 
-      {tab === "home" && <Home_ quests={quests} goal={goal} energy={energy} onToggle={toggleQuest} onViewAll={() => setTab("quests")} profile={profile} levels={levels} />}
+      {tab === "home" && <Home_ quests={quests} goal={goal} energy={energy} onToggle={toggleQuest} onViewAll={() => setTab("quests")} profile={profile} levels={levels} playerMode={playerMode} xp={xp} />}
       {tab === "quests" && <Quests_ quests={quests} onToggle={toggleQuest} />}
       {tab === "map" && (
         <MapScreen_
@@ -846,7 +850,7 @@ export default function CreativeEmpireOS() {
       )}
       {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels}
         generatedCount={contacts.filter(c => c.sim || c.generatedByAiMode).length + places.filter(p => p.generatedByAiMode).length}
-        onClearGenerated={clearGeneratedContent} xp={xp} unlockedAchievements={unlockedAchievements} />}
+        onClearGenerated={clearGeneratedContent} xp={xp} unlockedAchievements={unlockedAchievements} playerMode={playerMode} />}
 
       {selectedNode && (
         <NodeSheet node={selectedNode} onClose={() => setSelectedNode(null)}
@@ -1162,11 +1166,12 @@ function NavBtn({ icon: Icon, label, active, onClick }) {
 }
 
 /* ================= HOME (simplified — map lives on its own tab now) ================= */
-function Home_({ quests, goal, energy, onToggle, onViewAll, profile, levels }) {
+function Home_({ quests, goal, energy, onToggle, onViewAll, profile, levels, playerMode = "creator", xp = 0 }) {
   const pct = Math.round((goal.current / goal.target) * 100);
   const top3 = quests.filter(q => q.tier !== "ignore").slice(0, 3);
   const primary = quests.find(q => q.tier === "primary");
   const currentLevel = levels.find(l => l.state === "current") || levels[0];
+  const questsDone = quests.filter(q => q.done).length;
   return (
     <div>
       <div style={{ display: "flex", gap: 10, padding: "16px 14px 8px" }}>
@@ -1186,28 +1191,38 @@ function Home_({ quests, goal, energy, onToggle, onViewAll, profile, levels }) {
         </WoodPanel>
       </div>
 
-      <WoodPanel style={{ margin: "6px 14px 0", padding: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-          <div>
-            <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: T.gold }}>MISSION</div>
-            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18 }}>$100,000 in 12 months</div>
+      {playerMode === "creator" ? (
+        <WoodPanel style={{ margin: "6px 14px 0", padding: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: T.gold }}>MISSION</div>
+              <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18 }}>${goal.target.toLocaleString()} goal</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <span style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: T.goldBright }}>${goal.current.toLocaleString()}</span>
+              <span style={{ fontFamily: body, fontSize: 12, color: T.textMuted }}> / ${goal.target.toLocaleString()}</span>
+            </div>
           </div>
-          <div style={{ textAlign: "right" }}>
-            <span style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: T.goldBright }}>${goal.current.toLocaleString()}</span>
-            <span style={{ fontFamily: body, fontSize: 12, color: T.textMuted }}> / ${goal.target.toLocaleString()}</span>
+          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1 }}><Bar pct={pct} color={T.green} h={9} /></div>
+            <span style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: T.green }}>{pct}%</span>
           </div>
-        </div>
-        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ flex: 1 }}><Bar pct={pct} color={T.green} h={9} /></div>
-          <span style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: T.green }}>{pct}%</span>
-        </div>
-      </WoodPanel>
+        </WoodPanel>
+      ) : (
+        <WoodPanel style={{ margin: "6px 14px 0", padding: 14 }}>
+          <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: T.gold }}>YOUR PARTICIPATION</div>
+          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, marginTop: 3 }}>{xp} XP earned</div>
+          <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, marginTop: 4 }}>
+            Explore galleries, check in at real places, complete quests — every real thing you do here counts.
+          </div>
+        </WoodPanel>
+      )}
 
       <div style={{ display: "flex", gap: 8, margin: "10px 14px 0" }}>
         <Scroll style={{ flex: 1, padding: "9px 10px", textAlign: "center" }}>
-          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1 }}>DAYS LEFT</div>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 20 }}>312</div>
-          <div style={{ fontFamily: body, fontSize: 9, color: T.green, fontWeight: 700 }}>ON PACE ↑</div>
+          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1 }}>QUESTS DONE</div>
+          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 20 }}>{questsDone}</div>
+          <div style={{ fontFamily: body, fontSize: 9, color: T.green, fontWeight: 700 }}>REAL PROGRESS</div>
         </Scroll>
         <Scroll style={{ flex: 1.3, padding: "9px 10px" }}>
           <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, textAlign: "center" }}>ENERGY</div>
@@ -2008,7 +2023,7 @@ function Quests_({ quests, onToggle }) {
 }
 
 /* ================= PROFILE ================= */
-function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, onClearGenerated, xp = 0, unlockedAchievements = [] }) {
+function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, onClearGenerated, xp = 0, unlockedAchievements = [], playerMode = "creator" }) {
   const meta = { Career: Briefcase, Inventory: ImageIcon, Finances: DollarSign, Relationships: Users, Health: Heart, Time: Clock };
   const profileLevel = computeProfileLevel(xp);
   const badge = currentBadge(profileLevel.level);
@@ -2034,80 +2049,111 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
         )}
       </Scroll>
 
-      <div style={{ margin: "14px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>CONFIDENCE METER</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-        {Object.entries(confidence).map(([k, v]) => {
-          const Icon = meta[k];
-          return (
-            <Scroll key={k} style={{ padding: "10px 6px", textAlign: "center" }}>
-              <Icon size={16} color={T.wood} style={{ margin: "0 auto" }} />
-              <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, marginTop: 4 }}>{k}</div>
-              <div style={{ fontFamily: head, fontWeight: 800, fontSize: 14 }}>{v}%</div>
-              <Bar pct={v} color={T.green} track="#00000022" h={4} />
-            </Scroll>
-          );
-        })}
-      </div>
-      <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>SKILLS</div>
-      <Scroll style={{ padding: 14 }}>
-        {skills.map(s => (
-          <div key={s.k} style={{ marginBottom: 11 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 12, fontWeight: 700, marginBottom: 3 }}>
-              <span>{s.label}</span><span style={{ color: "#5b4630" }}>Lv.{s.level} · {s.xp}/{s.need}</span>
-            </div>
-            <Bar pct={(s.xp / s.need) * 100} color={s.color} track="#00000022" />
+      {playerMode === "creator" ? (
+        <>
+          <div style={{ margin: "14px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>CONFIDENCE METER</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+            {Object.entries(confidence).map(([k, v]) => {
+              const Icon = meta[k];
+              return (
+                <Scroll key={k} style={{ padding: "10px 6px", textAlign: "center" }}>
+                  <Icon size={16} color={T.wood} style={{ margin: "0 auto" }} />
+                  <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, marginTop: 4 }}>{k}</div>
+                  <div style={{ fontFamily: head, fontWeight: 800, fontSize: 14 }}>{v}%</div>
+                  <Bar pct={v} color={T.green} track="#00000022" h={4} />
+                </Scroll>
+              );
+            })}
           </div>
-        ))}
-      </Scroll>
-      <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>
-        CAREER PATH <span style={{ fontWeight: 500, color: "#c9a75a" }}>· Universal Levels</span>
-      </div>
-      <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted, margin: "-4px 0 8px" }}>
-        Everyone climbs the same ladder. A level is earned by evidence, not by time spent in the app.
-      </div>
-      <Scroll style={{ padding: 14 }}>
-        {levels.map((t, i) => (
-          <div key={t.n} style={{ display: "flex", gap: 10, opacity: t.state === "locked" ? 0.55 : 1 }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 24 }}>
-              <div style={{ width: 22, height: 22, borderRadius: "50%",
-                background: t.state === "done" ? T.green : t.state === "current" ? T.gold : "#00000015",
-                display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {t.state === "done" ? <CheckCircle2 size={13} color="#fff" /> : t.state === "locked" ? <Lock size={11} color={T.textDark} /> :
-                  <span style={{ fontFamily: head, fontSize: 10, fontWeight: 800 }}>{t.n}</span>}
+          <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>SKILLS</div>
+          <Scroll style={{ padding: 14 }}>
+            {skills.map(s => (
+              <div key={s.k} style={{ marginBottom: 11 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 12, fontWeight: 700, marginBottom: 3 }}>
+                  <span>{s.label}</span><span style={{ color: "#5b4630" }}>Lv.{s.level} · {s.xp}/{s.need}</span>
+                </div>
+                <Bar pct={(s.xp / s.need) * 100} color={s.color} track="#00000022" />
               </div>
-              {i < levels.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 18, background: T.wood, opacity: 0.4, marginTop: 2 }} />}
-            </div>
-            <div style={{ paddingBottom: 14, flex: 1 }}>
-              <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{t.n}. {t.title}</div>
-              <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{t.sub}</div>
-              {t.state === "current" && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontFamily: head, fontSize: 10, fontWeight: 700, marginBottom: 3 }}>
-                    <span>LEVEL XP</span><span>{t.xp} / {t.xpNeed} · {Math.round(t.xp / t.xpNeed * 100)}%</span>
+            ))}
+          </Scroll>
+          <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>
+            CAREER PATH <span style={{ fontWeight: 500, color: "#c9a75a" }}>· Universal Levels</span>
+          </div>
+          <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted, margin: "-4px 0 8px" }}>
+            Everyone climbs the same ladder. A level is earned by evidence, not by time spent in the app.
+          </div>
+          <Scroll style={{ padding: 14 }}>
+            {levels.map((t, i) => (
+              <div key={t.n} style={{ display: "flex", gap: 10, opacity: t.state === "locked" ? 0.55 : 1 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 24 }}>
+                  <div style={{ width: 22, height: 22, borderRadius: "50%",
+                    background: t.state === "done" ? T.green : t.state === "current" ? T.gold : "#00000015",
+                    display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {t.state === "done" ? <CheckCircle2 size={13} color="#fff" /> : t.state === "locked" ? <Lock size={11} color={T.textDark} /> :
+                      <span style={{ fontFamily: head, fontSize: 10, fontWeight: 800 }}>{t.n}</span>}
                   </div>
-                  <Bar pct={(t.xp / t.xpNeed) * 100} color={T.gold} track="#00000022" />
-                  <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 6 }}>
-                    {computeCategoryProgress(t.categories).categories.map(c => (
-                      <div key={c.name}>
-                        <div style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 10.5, fontWeight: 700 }}>
-                          <span>{c.name}</span><span>{c.met}/{c.total}</span>
-                        </div>
-                        <Bar pct={c.pct} color={c.complete ? T.green : T.wood} track="#00000018" h={5} />
+                  {i < levels.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 18, background: T.wood, opacity: 0.4, marginTop: 2 }} />}
+                </div>
+                <div style={{ paddingBottom: 14, flex: 1 }}>
+                  <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{t.n}. {t.title}</div>
+                  <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{t.sub}</div>
+                  {t.state === "current" && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: head, fontSize: 10, fontWeight: 700, marginBottom: 3 }}>
+                        <span>LEVEL XP</span><span>{t.xp} / {t.xpNeed} · {Math.round(t.xp / t.xpNeed * 100)}%</span>
                       </div>
-                    ))}
-                  </div>
-                  <div style={{ fontFamily: body, fontSize: 10.5, color: "#5b4630", marginTop: 6, fontStyle: "italic" }}>
-                    Different disciplines clear these differently — a mural artist and a gallery painter can both reach Level 5 through different work.
+                      <Bar pct={(t.xp / t.xpNeed) * 100} color={T.gold} track="#00000022" />
+                      <div style={{ marginTop: 9, display: "flex", flexDirection: "column", gap: 6 }}>
+                        {computeCategoryProgress(t.categories).categories.map(c => (
+                          <div key={c.name}>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 10.5, fontWeight: 700 }}>
+                              <span>{c.name}</span><span>{c.met}/{c.total}</span>
+                            </div>
+                            <Bar pct={c.pct} color={c.complete ? T.green : T.wood} track="#00000018" h={5} />
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontFamily: body, fontSize: 10.5, color: "#5b4630", marginTop: 6, fontStyle: "italic" }}>
+                        Different disciplines clear these differently — a mural artist and a gallery painter can both reach Level 5 through different work.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </Scroll>
+        </>
+      ) : (
+        <>
+          <div style={{ margin: "14px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>ACHIEVEMENTS</div>
+          <Scroll style={{ padding: 14 }}>
+            {unlockedAchievements.length === 0 && (
+              <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, textAlign: "center", padding: 10 }}>
+                Nothing unlocked yet — get out there and explore.
+              </div>
+            )}
+            {unlockedAchievements.map(id => {
+              const a = ACHIEVEMENTS.find(x => x.id === id);
+              if (!a) return null;
+              return (
+                <div key={id} style={{ display: "flex", gap: 10, padding: "8px 0", borderTop: `1px solid ${T.wood}22` }}>
+                  <div style={{ fontSize: 18 }}>🏆</div>
+                  <div>
+                    <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13 }}>{a.name}</div>
+                    <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{a.description}</div>
                   </div>
                 </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </Scroll>
+              );
+            })}
+          </Scroll>
+        </>
+      )}
       <div style={{ margin: "18px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>QUICK ACCESS</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-        {[["Inventory", ImageIcon], ["Calendar", Calendar], ["Finances", DollarSign], ["Training", Dumbbell], ["System", Activity], ["Opportunities", Trophy]].map(([label, Icon]) => (
+        {(playerMode === "creator"
+          ? [["Inventory", ImageIcon], ["Calendar", Calendar], ["Finances", DollarSign], ["Training", Dumbbell], ["System", Activity], ["Opportunities", Trophy]]
+          : [["Calendar", Calendar], ["System", Activity], ["Opportunities", Trophy]]
+        ).map(([label, Icon]) => (
           <button key={label} onClick={() => onQuickAccess(label)} style={{ background: T.panel, border: `2px solid ${T.wood}`,
             borderRadius: 12, padding: "12px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
             <Icon size={16} color={T.gold} /><span style={{ fontFamily: head, fontSize: 10, fontWeight: 700 }}>{label}</span>
