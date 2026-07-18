@@ -1735,12 +1735,18 @@ function getTimeOfDay() {
 
 function applySky(map, timeOfDay) {
   const p = SKY_PALETTE[timeOfDay] || SKY_PALETTE.day;
+  const paint = {
+    "sky-type": "gradient",
+    "sky-gradient": ["interpolate", ["linear"], ["sky-radial-distance"], 0, p.horizon, 1, p.zenith],
+    "sky-gradient-center": [0, 0], "sky-gradient-radius": 90, "sky-opacity": 1,
+  };
   try {
-    map.setSky({
-      "sky-type": "gradient",
-      "sky-gradient": ["interpolate", ["linear"], ["sky-radial-distance"], 0, p.horizon, 1, p.zenith],
-      "sky-gradient-center": [0, 0], "sky-gradient-radius": 90, "sky-opacity": 1,
-    });
+    // The sky LAYER (part of the actual style spec, added via addLayer) is the
+    // reliable way to do this — map.setSky() is a convenience method that may not
+    // exist on every MapLibre version, and a real device confirmed it wasn't
+    // rendering. This is the same feature, added the more universally-supported way.
+    if (map.getLayer("art-district-sky")) { Object.entries(paint).forEach(([k, v]) => map.setPaintProperty("art-district-sky", k, v)); }
+    else map.addLayer({ id: "art-district-sky", type: "sky", paint });
   } catch { /* this MapLibre version/style doesn't support the sky layer — the map still works without it */ }
 }
 
@@ -1826,6 +1832,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   const markersRef = useRef([]); // { marker, root } — so React roots get cleanly unmounted, not leaked
   const avatarRef = useRef(null); // { marker, root } — the player's own avatar, separate from entity markers
   const hasArrivedRef = useRef(false); // gates the one-time arrival flyTo vs. ongoing quick follow
+  const isAnimatingRef = useRef(false); // true during any flyTo — guards against the center-lock fighting it
   // The map's zoom/rotate handlers are attached once, in an empty-dependency effect —
   // without these refs, they'd close over playerPosition/interior's initial (null)
   // values forever, never seeing real updates. Refs always read current.
@@ -1866,7 +1873,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       // CRITICAL: MapLibre's default maxPitch cap is 60° — setting pitch above that
       // without also raising maxPitch gets silently clamped back down to 60, and
       // nothing about "increase the pitch toward the horizon" would actually happen.
-      pitch: 45, maxPitch: 82, minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX, attributionControl: false,
+      pitch: 60, maxPitch: 82, minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX, attributionControl: false,
       dragPan: false, // camera follows the player instead of being freely draggable
       padding: { top: viewportHeight * 0.38, bottom: 0, left: 0, right: 0 },
       maxBounds: [
@@ -1882,6 +1889,12 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     // (fired continuously during the gesture, not just at the end) keeps the avatar
     // as the fixed pivot throughout, not just once you let go.
     function relockCenterOnAvatar() {
+      // Skip entirely during an active flyTo (arrival, entering a building, etc.) —
+      // that animation is already moving the center deliberately; instantly
+      // snapping it back on every 'zoom' tick fights the animation and can cut it
+      // short before it reaches its real target (this is what was likely capping
+      // the arrival sequence at a flatter pitch than intended).
+      if (isAnimatingRef.current) return;
       if (!playerPositionRef.current || interiorForCameraRef.current) return;
       const c = map.getCenter();
       const { lng, lat } = playerPositionRef.current;
@@ -1889,6 +1902,11 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     }
     map.on("zoom", () => { setZoom(map.getZoom()); relockCenterOnAvatar(); });
     map.on("rotate", relockCenterOnAvatar);
+    // Tracks any programmatic camera animation (flyTo/easeTo) so the relock above
+    // can get out of its way — 'movestart' with a non-gesture source means our own
+    // code triggered it, not a touch gesture we still want to relock during.
+    map.on("movestart", e => { if (!e.originalEvent) isAnimatingRef.current = true; });
+    map.on("moveend", () => { isAnimatingRef.current = false; });
     map.on("load", () => {
       setMapReady(true);
       applyArtDistrictTheme(map, isNightNow());
@@ -1955,6 +1973,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         // starts behind the player"); if heading isn't known yet, bearing is left
         // as-is rather than guessing a direction.
         hasArrivedRef.current = true;
+        isAnimatingRef.current = true;
         map.flyTo({
           center: [playerPosition.lng, playerPosition.lat], zoom: DEFAULT_ZOOM, pitch: 72,
           bearing: playerPosition.heading != null ? playerPosition.heading : map.getBearing(),
@@ -1970,7 +1989,9 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   }, [playerPosition, mapReady, interior, avatarModel]);
 
   function flyTo(lng, lat, targetZoom, pitch) {
-    mapRef.current?.flyTo({ center: [lng, lat], zoom: targetZoom, pitch: pitch ?? mapRef.current.getPitch(), duration: 600 });
+    if (!mapRef.current) return;
+    isAnimatingRef.current = true;
+    mapRef.current.flyTo({ center: [lng, lat], zoom: targetZoom, pitch: pitch ?? mapRef.current.getPitch(), duration: 600 });
   }
   function returnToDistrictView() {
     setInterior(null);
