@@ -10,15 +10,16 @@ import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCateg
 import { applyInteraction, groupPeopleBy, clampStat, normalizeTrainingNpc } from "./engines/relationshipEngine";
 import { loadNpc } from "./training/data";
 import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, DEFAULT_ZOOM, clampZoom, computeTier, buildDistricts, DISTRICT_LAYOUT } from "./engines/mapEngine";
-import { DEFAULT_HOME_BASE, geocodeAddress } from "./engines/geoEngine";
+import { DEFAULT_HOME_BASE, geocodeAddress, computeHeadingFromPositions, jitterNearBase } from "./engines/geoEngine";
 import { buildUpcomingDeadlines, isUrgentDeadline, consolidateByTitle, filterDeadlines } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
 import { driftNpcOverTime, generatePublicProfile } from "./engines/npcEngine";
 import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation, ACHIEVEMENTS } from "./engines/artistProfileEngine";
+import { buildCreativeDrop, getRevealedDrops } from "./engines/collectiblesEngine";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
-  DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, Check, X, Star, Lock,
+  DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, ChevronDown, Check, X, Star, Lock,
   CheckCircle2, Dumbbell, Calendar, ArrowUp, Building2, Coffee, ShoppingBag, Landmark,
   Zap, Lightbulb, Sparkles, Trophy, PiggyBank, Palette, BookOpen, AlertTriangle, MapPin as PinIcon, Trash2, Edit3, Activity
 } from "lucide-react";
@@ -171,6 +172,18 @@ function nextSpot() { const s = SPARE_SPOTS[spotCursor % SPARE_SPOTS.length]; sp
 // unchanged.
 
 /* Categories for places and events — drive icon/color and give the map real visual variety. */
+// Real 3D avatar models — Kenney's "Mini Characters" pack (CC0, public domain),
+// served from public/avatars/. GLB format, ~250KB each, renders via <model-viewer>
+// (loaded in index.html) — no hand-written Three.js scene setup needed.
+const AVATAR_OPTIONS = [
+  { key: "character-female-a", label: "Female A" }, { key: "character-female-b", label: "Female B" },
+  { key: "character-female-c", label: "Female C" }, { key: "character-female-d", label: "Female D" },
+  { key: "character-female-e", label: "Female E" }, { key: "character-female-f", label: "Female F" },
+  { key: "character-male-a", label: "Male A" }, { key: "character-male-b", label: "Male B" },
+  { key: "character-male-c", label: "Male C" }, { key: "character-male-d", label: "Male D" },
+  { key: "character-male-e", label: "Male E" }, { key: "character-male-f", label: "Male F" },
+];
+
 const PLACE_CATEGORIES = [
   { key: "studio", label: "Studio", icon: Palette, color: T.wood },
   { key: "gallery", label: "Gallery", icon: Landmark, color: T.purple },
@@ -301,7 +314,7 @@ function DetailsLog({ log, onAdd }) {
 
 /* ================= MAIN APP ================= */
 export default function CreativeEmpireOS() {
-  const [tab, setTab] = useState("home");
+  const [tab, setTab] = useState("map");
   const [quests, setQuests] = useState(initialQuests);
   const [confidence, setConfidence] = useState(initialConfidence);
   const [goal, setGoal] = useState({ current: 28450, target: 100000 });
@@ -320,6 +333,7 @@ export default function CreativeEmpireOS() {
   const [unlockedAchievements, setUnlockedAchievements] = useState([]);
   const [archive, setArchive] = useState([]);
   const [discoveredLocations, setDiscoveredLocations] = useState([]);
+  const [drops, setDrops] = useState([]);
   const [lastLocationFetch, setLastLocationFetch] = useState(0);
   const [aiNpcMode, setAiNpcMode] = useState(false);
   // AI NPC Mode acts like a genuinely separate world: generated people/businesses are
@@ -331,6 +345,7 @@ export default function CreativeEmpireOS() {
   const visibleContacts = aiNpcMode ? contacts : contacts.filter(c => !c.generatedByAiMode);
   const visiblePlaces = aiNpcMode ? places : places.filter(p => !p.generatedByAiMode);
   const [homeBase, setHomeBase] = useState(DEFAULT_HOME_BASE);
+  const [playerPosition, setPlayerPosition] = useState(null); // { lat, lng, heading } — updates continuously
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -353,6 +368,11 @@ export default function CreativeEmpireOS() {
   const [skills, setSkills] = useState(() => computeSkills({}));
   const [levels, setLevels] = useState(() => computeLevels({}));
   const [authUser, setAuthUser] = useState(undefined); // undefined = still checking, null = signed out, object = signed in
+  // World Builder admin check — a real whitelist against the authenticated email,
+  // not a client-side flag someone could fake by editing local state. EMPTY until
+  // you give me the real sign-in email to add here.
+  const ADMIN_EMAILS = ["zakthecreativ@gmail.com"];
+  const isAdmin = !!authUser?.email && ADMIN_EMAILS.includes(authUser.email.toLowerCase());
 
   // Subscribe to real auth state — fires on sign-in, sign-out, and switching accounts.
   useEffect(() => {
@@ -394,6 +414,7 @@ export default function CreativeEmpireOS() {
         if (save.unlockedAchievements) setUnlockedAchievements(save.unlockedAchievements);
         if (save.archive) setArchive(save.archive);
         if (save.discoveredLocations) setDiscoveredLocations(save.discoveredLocations);
+        if (save.drops) setDrops(save.drops);
         if (typeof save.lastLocationFetch === "number") setLastLocationFetch(save.lastLocationFetch);
         // Lazy catch-up for practice partners: drift their career state by however
         // much real time passed since last visit — deterministic, so this never
@@ -465,25 +486,55 @@ export default function CreativeEmpireOS() {
     loadNpc().then(npc => setTrainingNpc(normalizeTrainingNpc(npc))).catch(() => {});
   }, [authUser]);
 
-  // Real device location for the map's home base — falls back to Atlanta (where
-  // this app's seed data already lives) if permission is denied or unavailable.
-  // This is what "opportunities placed at real-world locations" is actually centered on.
+  // Real device location for the map's home base and the live player avatar.
+  // homeBase is set ONCE (first fix) — it anchors the map's bounds/starting center.
+  // playerPosition updates CONTINUOUSLY via watchPosition — this is what actually
+  // moves the avatar and drives collectible proximity checks, which a one-time
+  // getCurrentPosition could never support.
   useEffect(() => {
     if (!authUser || !navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      pos => setHomeBase({ lat: pos.coords.latitude, lng: pos.coords.longitude, label: "Your location" }),
-      () => { /* denied or unavailable — DEFAULT_HOME_BASE (Atlanta) already covers this */ },
-      { timeout: 8000 }
+    let gotFirstFix = false;
+    const watchId = navigator.geolocation.watchPosition(
+      pos => {
+        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (!gotFirstFix) { setHomeBase({ ...p, label: "Your location" }); gotFirstFix = true; }
+        setPlayerPosition(prev => {
+          // Heading: derived from real consecutive fixes when the device doesn't
+          // report one directly — never invented, just left as-is (last known
+          // heading) if the player hasn't moved enough to compute a new one.
+          const heading = pos.coords.heading != null && Number.isFinite(pos.coords.heading)
+            ? pos.coords.heading
+            : (prev ? computeHeadingFromPositions(prev, p) ?? prev.heading : null);
+          return { ...p, heading };
+        });
+      },
+      () => { /* denied or unavailable — DEFAULT_HOME_BASE (Atlanta) already covers homeBase; avatar just won't show */ },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 5000 }
     );
+    return () => navigator.geolocation.clearWatch(watchId);
   }, [authUser]);
+
+  // Seeds a small set of real Creative Drops near the player's actual home base —
+  // once, not re-seeded on every GPS tick. Deterministic jitter (same seed key,
+  // same spot every time), not random reshuffling.
+  useEffect(() => {
+    if (!loaded) return; // never seed before the initial save-load has actually resolved
+    if (drops.length > 0) return;
+    if (homeBase.lat === DEFAULT_HOME_BASE.lat && homeBase.lng === DEFAULT_HOME_BASE.lng) return; // wait for a real fix
+    const dropTypes = ["palette", "paintbrush", "sketchbook", "vinyl", "inspiration"];
+    setDrops(dropTypes.map((type, i) => {
+      const spot = jitterNearBase(homeBase.lat, homeBase.lng, `seed-drop-${i}`, 0.15); // small radius — genuinely nearby
+      return buildCreativeDrop({ type, lat: spot.lat, lng: spot.lng });
+    }));
+  }, [homeBase, loaded]);
 
   // Save on every meaningful change. Skipped until onboarding + the initial load have
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch, lastSeen: Date.now() })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch, drops, lastSeen: Date.now() })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch, drops]);
 
   // Career Director: reads across the other engines and decides what the Command
   // Board should show — re-scoring existing quests and proposing new ones from real
@@ -631,6 +682,13 @@ export default function CreativeEmpireOS() {
     setPlaces(ps => ps.filter(p => !p.generatedByAiMode));
     setAiNpcMode(false);
     flash(`Removed ${removedPeople} simulated people and ${removedPlaces} generated businesses.`);
+  }
+  // Marks a drop collected (it never re-reveals — same tested rule as
+  // isPlayerNearDrop) and awards its real embedded XP reward, not a made-up amount.
+  function collectDrop(drop) {
+    setDrops(ds => ds.map(d => (d.type === drop.type && d.lat === drop.lat && d.lng === drop.lng) ? { ...d, collected: true } : d));
+    setXp(x => x + (drop.xpReward || 15));
+    flash(`✨ Collected: ${drop.label} · +${drop.xpReward || 15} XP`);
   }
   function trackOpportunity(o) {
     setQuests(qs => [...qs, {
@@ -795,10 +853,12 @@ export default function CreativeEmpireOS() {
   }
 
   const DISCOVERY_ICON = { gallery: Palette, museum: Landmark, public_art: ImageIcon };
+  const revealedDrops = getRevealedDrops(drops, playerPosition?.lat, playerPosition?.lng);
   const allNodes = [
     ...visibleContacts, ...visiblePlaces, ...events,
     ...opps.map(o => ({ ...o, kind: "opportunity" })),
     ...discoveredLocations.map(l => ({ ...l, kind: "place", icon: DISCOVERY_ICON[l.category] || Palette, color: T.forestLight, discovered: true, name: l.name })),
+    ...revealedDrops.map(d => ({ ...d, id: `${d.type}-${d.lat}-${d.lng}`, kind: "place", name: d.label, isCollectible: true, color: T.forestLight })),
     { id: "ideas-hub", kind: "idea", name: "Ideas", icon: Lightbulb, color: T.gold, pos: { x: 46, y: 40 } },
   ];
 
@@ -875,12 +935,13 @@ export default function CreativeEmpireOS() {
           <MapScreen_
             nodes={allNodes} quests={quests} events={events} energy={energy}
             onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
+            playerPosition={playerPosition} avatarModel={profile?.avatarModel} onCollectDrop={collectDrop}
           />
         </div>
       )}
       {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels}
         generatedCount={contacts.filter(c => c.sim || c.generatedByAiMode).length + places.filter(p => p.generatedByAiMode).length}
-        onClearGenerated={clearGeneratedContent} xp={xp} unlockedAchievements={unlockedAchievements} playerMode={playerMode} />}
+        onClearGenerated={clearGeneratedContent} xp={xp} unlockedAchievements={unlockedAchievements} playerMode={playerMode} isAdmin={isAdmin} />}
 
       {selectedNode && (
         <NodeSheet node={selectedNode} onClose={() => setSelectedNode(null)}
@@ -901,22 +962,30 @@ export default function CreativeEmpireOS() {
           onClose={closeAdd} onSubmitAdd={submitAdd} onSubmitDebrief={submitDebrief} />
       )}
 
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 480, margin: "0 auto",
-        display: "flex", alignItems: "center", justifyContent: "space-around",
-        background: tab === "map" ? "#00000070" : `linear-gradient(180deg, ${T.wood}, ${T.ink})`,
-        backdropFilter: tab === "map" ? "blur(10px)" : "none",
-        borderTop: tab === "map" ? "1px solid #ffffff22" : `3px solid ${T.gold}`,
-        padding: "10px 8px calc(10px + env(safe-area-inset-bottom, 0px))" }}>
-        <NavBtn icon={HomeIcon} label="Home" active={tab === "home"} onClick={() => setTab("home")} />
-        <NavBtn icon={Swords} label="Quests" active={tab === "quests"} onClick={() => setTab("quests")} />
-        <button onClick={() => setAddOpen(true)} style={{ width: 54, height: 54, borderRadius: "50%",
-          background: `radial-gradient(circle at 35% 30%, ${T.goldBright}, ${T.gold})`, border: `3px solid #FFE9B0`,
-          display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 16px #000a", marginTop: -20 }}>
-          <Plus color={T.ink} size={26} strokeWidth={3} />
-        </button>
-        <NavBtn icon={Globe} label="Map" active={tab === "map"} onClick={() => setTab("map")} />
-        <NavBtn icon={User} label="Profile" active={tab === "profile"} onClick={() => setTab("profile")} />
-      </nav>
+      {/* Edge-floating nav — no persistent bar. The map is the main app now, these
+          are just quick escape hatches to the other screens, out of the way by default. */}
+      <button onClick={() => setTab(tab === "home" ? "map" : "home")} style={{ position: "fixed", top: "calc(14px + env(safe-area-inset-top, 0px))", left: 14,
+        width: 42, height: 42, borderRadius: "50%", background: tab === "home" ? T.gold : "#00000080", backdropFilter: "blur(8px)",
+        border: `1.5px solid ${tab === "home" ? T.gold : "#ffffff33"}`, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 }}>
+        <HomeIcon size={18} color={tab === "home" ? T.ink : "#fff"} />
+      </button>
+      <button onClick={() => setTab(tab === "profile" ? "map" : "profile")} style={{ position: "fixed", top: "calc(14px + env(safe-area-inset-top, 0px))", right: 14,
+        width: 42, height: 42, borderRadius: "50%", background: tab === "profile" ? T.gold : "#00000080", backdropFilter: "blur(8px)",
+        border: `1.5px solid ${tab === "profile" ? T.gold : "#ffffff33"}`, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 }}>
+        <User size={18} color={tab === "profile" ? T.ink : "#fff"} />
+      </button>
+      <button onClick={() => setTab(tab === "quests" ? "map" : "quests")} style={{ position: "fixed", bottom: "calc(20px + env(safe-area-inset-bottom, 0px))", left: 14,
+        width: 46, height: 46, borderRadius: "50%", background: tab === "quests" ? T.gold : "#00000080", backdropFilter: "blur(8px)",
+        border: `1.5px solid ${tab === "quests" ? T.gold : "#ffffff33"}`, display: "flex", alignItems: "center", justifyContent: "center",
+        boxShadow: "0 4px 12px #0006", zIndex: 20 }}>
+        <Swords size={19} color={tab === "quests" ? T.ink : "#fff"} />
+      </button>
+      <button onClick={() => setAddOpen(true)} style={{ position: "fixed", bottom: "calc(20px + env(safe-area-inset-bottom, 0px))", left: "50%", transform: "translateX(-50%)",
+        width: 58, height: 58, borderRadius: "50%",
+        background: `radial-gradient(circle at 35% 30%, ${T.goldBright}, ${T.gold})`, border: "3px solid #FFE9B0",
+        display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 6px 16px #000a", zIndex: 20 }}>
+        <Plus color={T.ink} size={26} strokeWidth={3} />
+      </button>
     </div>
   );
 }
@@ -1325,7 +1394,7 @@ function MiniStep({ icon: Icon, label }) {
 }
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
-function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0 }) {
+function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const [showList, setShowList] = useState(false); // minimal UI: the deadlines/level panel is collapsed by default
@@ -1383,28 +1452,32 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       {/* the map itself — full-screen, edge to edge, the primary interface now */}
-      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} />
+      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} playerPosition={playerPosition} avatarModel={avatarModel} onCollectDrop={onCollectDrop} />
 
-      {/* minimal floating UI on top — collapsed by default so the city stays the focus */}
-      <div style={{ position: "absolute", top: 10, left: 10, right: 10, display: "flex", justifyContent: "space-between", pointerEvents: "none" }}>
-        <button onClick={() => setShowList(s => !s)} style={{ pointerEvents: "auto", background: "#00000090", backdropFilter: "blur(6px)",
-          border: "1px solid #ffffff22", borderRadius: 20, padding: "6px 12px", display: "flex", alignItems: "center", gap: 6 }}>
+      {/* minimal floating UI — one small button, not a persistent row, since Home/
+          Profile now occupy the top corners. Everything else lives behind it. */}
+      <div style={{ position: "absolute", top: "calc(14px + env(safe-area-inset-top, 0px))", left: "50%", transform: "translateX(-50%)" }}>
+        <button onClick={() => setShowList(s => !s)} style={{ background: "#00000090", backdropFilter: "blur(6px)",
+          border: "1px solid #ffffff22", borderRadius: 20, padding: "7px 14px", display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontFamily: head, fontWeight: 800, fontSize: 12, color: T.goldBright }}>Lv {profileLevel.level}</span>
           {(urgentEvent || lowEnergy) && <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.rose }} />}
+          <ChevronDown size={12} color="#fff" style={{ transform: showList ? "rotate(180deg)" : "none" }} />
         </button>
-        <div style={{ display: "flex", gap: 6, pointerEvents: "auto" }}>
-          {FILTERS.map(f => (
-            <button key={f.key} onClick={() => { setFilter(f.key); if (f.key !== "person") setOrganizeBy("map"); }}
-              style={{ width: 30, height: 30, borderRadius: "50%", background: filter === f.key ? f.color : "#00000090",
-                backdropFilter: "blur(6px)", border: `1.5px solid ${f.color}`, display: "flex", alignItems: "center", justifyContent: "center" }}
-              title={f.label} />
-          ))}
-        </div>
       </div>
 
       {showList && (
-        <div style={{ position: "absolute", top: 52, left: 10, right: 10, background: "#00000090", backdropFilter: "blur(6px)",
+        <div style={{ position: "absolute", top: 60, left: 10, right: 10, background: "#00000090", backdropFilter: "blur(6px)",
           border: "1px solid #ffffff22", borderRadius: 14, padding: 12 }}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+            {FILTERS.map(f => (
+              <button key={f.key} onClick={() => { setFilter(f.key); if (f.key !== "person") setOrganizeBy("map"); }}
+                style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 20,
+                  background: filter === f.key ? f.color : "transparent", border: `1.5px solid ${f.color}`,
+                  color: filter === f.key ? T.ink : "#fff" }}>
+                <span style={{ fontFamily: head, fontSize: 10.5, fontWeight: 700 }}>{f.label}</span>
+              </button>
+            ))}
+          </div>
           <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, color: T.goldBright, marginBottom: 4 }}>
             NEAREST DEADLINES · {profileLevel.xpForNextLevel != null ? `${profileLevel.xpForNextLevel - profileLevel.xpIntoLevel} XP to next level` : "Max level"}
           </div>
@@ -1430,7 +1503,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
       )}
 
       {filter === "person" && (
-        <div style={{ position: "absolute", top: 52, right: 10, display: "flex", gap: 6 }}>
+        <div style={{ position: "absolute", top: 64, right: 10, display: "flex", gap: 6 }}>
           {[["met", "🤝"], ["connections", "🔗"]].map(([key, emoji]) => (
             <button key={key} onClick={() => setOrganizeBy(key)} style={{ width: 30, height: 30, borderRadius: "50%",
               background: "#00000090", backdropFilter: "blur(6px)", border: `1px solid ${T.gold}`, fontSize: 13 }}>{emoji}</button>
@@ -1476,8 +1549,11 @@ function isNightNow() {
 }
 
 const ART_DISTRICT_PALETTE = {
-  night: { bg: "#1a1a1d", building: "#c9a878", road: "#e0973d", roadMinor: "#b8792e", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
-  day: { bg: "#2a2a2d", building: "#e0c29c", road: "#f0a94a", roadMinor: "#d4903a", water: "#1a4f4d", land: "#96b08e", label: "#fff2d8", halo: "#1a1008" },
+  // road/roadMinor are real colors sampled directly from Kenney's City Kit (Roads)
+  // texture atlas (#8e95b3 lit asphalt, #515566/#38383d shadowed asphalt) — not
+  // estimated. No lane-marking accent color used, per direction.
+  night: { bg: "#1a1a1d", building: "#c9a878", road: "#666b80", roadMinor: "#38383d", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
+  day: { bg: "#2a2a2d", building: "#e0c29c", road: "#8e95b3", roadMinor: "#515566", water: "#1a4f4d", land: "#96b08e", label: "#fff2d8", halo: "#1a1008" },
 };
 // Non-interactive buildings sit back at partial opacity so real entity locations
 // naturally draw the eye — this is the actual mechanism behind "important places
@@ -1504,9 +1580,12 @@ function applyArtDistrictTheme(map, night) {
       else if (layer.type === "fill" && /(landuse|park|grass|wood|forest|golf|pitch)/i.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", p.land);
       else if (layer.type === "fill-extrusion") {
         map.setPaintProperty(layer.id, "fill-extrusion-color", p.building);
-        // Baseline building hierarchy: generic city fabric sits at partial opacity;
-        // the dedicated highlight layer (added separately) brings entity locations
-        // to full brightness on top of this.
+        // "Background buildings are flat, low-profile" — capping height low
+        // (rather than using real OSM height data, which varies wildly) is what
+        // actually makes the backdrop read as background, not a lighting trick.
+        // Interactive locations get their own separate, genuinely tall extrusion
+        // (see updateEntityHighlights) so they visibly pop above this.
+        map.setPaintProperty(layer.id, "fill-extrusion-height", 6);
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
       else if (layer.type === "line" && /(motorway|trunk|primary|highway)/i.test(layer.id)) map.setPaintProperty(layer.id, "line-color", p.road);
@@ -1537,45 +1616,80 @@ function addBuildingExtrusion(map, night) {
       id: "art-district-buildings-3d", type: "fill-extrusion", source: vectorSourceId, "source-layer": "building",
       paint: {
         "fill-extrusion-color": night ? ART_DISTRICT_PALETTE.night.building : ART_DISTRICT_PALETTE.day.building,
-        "fill-extrusion-height": ["coalesce", ["get", "render_height"], 8],
-        "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
-        // Same baseline as the theme function applies to any pre-existing building
-        // layer — a fallback-added layer shouldn't be brighter than the real one
-        // would have been; "non-interactive buildings sit back" has to hold either way.
+        // Same "flat, low-profile" rule as the theme function applies to a
+        // pre-existing building layer — a fallback shouldn't look more dramatic
+        // than the real thing would have.
+        "fill-extrusion-height": 6,
+        "fill-extrusion-base": 0,
         "fill-extrusion-opacity": BUILDING_OPACITY_BASELINE,
       },
     });
   } catch { /* this style's source-layer naming may differ from the OpenMapTiles assumption */ }
 }
 
+/** Builds a small square polygon around a point — real building footprints don't
+ *  reliably line up with entity coordinates, so interactive locations get their
+ *  own synthetic footprint to extrude, rather than trying to match OSM geometry. */
+function squareAround(lat, lng, radiusMeters) {
+  const dLat = radiusMeters / 111000;
+  const dLng = radiusMeters / (111000 * Math.cos((lat * Math.PI) / 180));
+  return [[
+    [lng - dLng, lat - dLat], [lng + dLng, lat - dLat],
+    [lng + dLng, lat + dLat], [lng - dLng, lat + dLat],
+    [lng - dLng, lat - dLat],
+  ]];
+}
+
 /**
- * The actual mechanism behind "important locations naturally draw attention":
- * generic OSM building polygons don't know about game entities, so precisely
- * re-coloring only the "right" building footprints isn't reliable. Instead, this
- * draws a soft glowing ground-halo at each entity's exact coordinate — a real
- * MapLibre circle layer with blur, sourced from live entity positions, not tied to
- * matching building geometry. The currently-entered entity gets a visibly stronger
+ * The actual mechanism behind "interactive buildings are fully 3D, background
+ * buildings are flat": generic OSM building polygons don't know about game
+ * entities, so precisely re-coloring/re-extruding only the "right" real building
+ * footprints isn't reliable. Instead, every interactive location gets its own
+ * synthetic footprint, extruded genuinely tall — visibly popping above the
+ * flattened city fabric — plus a soft ground-halo for extra visibility from a
+ * distance. The currently-entered entity gets both a taller box and a stronger
  * halo, covering "selected building: subtle glow and highlight."
  */
 function updateEntityHighlights(map, districts, selectedId) {
-  const features = districts.flatMap(d => d.entities.map(e => ({
+  const haloFeatures = districts.flatMap(d => d.entities.map(e => ({
     type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] },
     properties: { selected: e.id === selectedId ? 1 : 0, color: T[d.colorKey] || "#D9A441" },
   })));
-  const geojson = { type: "FeatureCollection", features };
+  const buildingFeatures = districts.flatMap(d => d.entities.map(e => ({
+    type: "Feature", geometry: { type: "Polygon", coordinates: squareAround(e.lat, e.lng, 4) },
+    properties: { selected: e.id === selectedId ? 1 : 0, color: T[d.colorKey] || "#D9A441" },
+  })));
+  const haloGeojson = { type: "FeatureCollection", features: haloFeatures };
+  const buildingGeojson = { type: "FeatureCollection", features: buildingFeatures };
   try {
-    const existing = map.getSource("entity-highlights");
-    if (existing) { existing.setData(geojson); return; }
-    map.addSource("entity-highlights", { type: "geojson", data: geojson });
-    map.addLayer({
-      id: "entity-highlight-halo", type: "circle", source: "entity-highlights",
-      paint: {
-        "circle-radius": ["case", ["==", ["get", "selected"], 1], 26, 16],
-        "circle-color": ["get", "color"],
-        "circle-opacity": ["case", ["==", ["get", "selected"], 1], 0.35, 0.18],
-        "circle-blur": 1,
-      },
-    });
+    const existingHalo = map.getSource("entity-highlights");
+    if (existingHalo) { existingHalo.setData(haloGeojson); }
+    else {
+      map.addSource("entity-highlights", { type: "geojson", data: haloGeojson });
+      map.addLayer({
+        id: "entity-highlight-halo", type: "circle", source: "entity-highlights",
+        paint: {
+          "circle-radius": ["case", ["==", ["get", "selected"], 1], 26, 16],
+          "circle-color": ["get", "color"],
+          "circle-opacity": ["case", ["==", ["get", "selected"], 1], 0.35, 0.18],
+          "circle-blur": 1,
+        },
+      });
+    }
+    const existingBuildings = map.getSource("entity-buildings");
+    if (existingBuildings) { existingBuildings.setData(buildingGeojson); }
+    else {
+      map.addSource("entity-buildings", { type: "geojson", data: buildingGeojson });
+      map.addLayer({
+        id: "entity-buildings-3d", type: "fill-extrusion", source: "entity-buildings",
+        paint: {
+          "fill-extrusion-color": ["get", "color"],
+          "fill-extrusion-height": ["case", ["==", ["get", "selected"], 1], 34, 22],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.85,
+        },
+      });
+    }
   } catch { /* non-critical visual layer — if this fails, markers still work fine on their own */ }
 }
 
@@ -1594,6 +1708,40 @@ function applyAtmosphere(map, night) {
       "horizon-blend": 0.15,
     });
   } catch { /* fog/sky not supported by this MapLibre version or style — the map still works without it */ }
+}
+
+/**
+ * These colors are sampled directly from the actual uploaded skybox images (Kenney's
+ * "Skyboxes" pack), not estimated — zenith and horizon bands averaged from the real
+ * PNGs. Honest limit: MapLibre's sky is a real, native procedural gradient/atmosphere
+ * feature, not an arbitrary image texture — it can't literally wrap the PNG as a
+ * skybox the way a game engine would, but it can genuinely match the same mood/colors.
+ */
+const SKY_PALETTE = {
+  morning: { horizon: "#f4cdb5", zenith: "#fdedd6" },
+  day: { horizon: "#a7bbf2", zenith: "#98bdf0" },
+  night: { horizon: "#28335d", zenith: "#2e3c6f" },
+};
+
+/** Morning/day/night — a real, slightly finer-grained time check than the plain
+ *  isNightNow() day/night split, since the morning skybox has a genuinely distinct
+ *  warm palette worth showing during its own window rather than folding into "day." */
+function getTimeOfDay() {
+  const h = new Date().getHours();
+  if (h < 6 || h >= 20) return "night";
+  if (h < 8) return "morning";
+  return "day";
+}
+
+function applySky(map, timeOfDay) {
+  const p = SKY_PALETTE[timeOfDay] || SKY_PALETTE.day;
+  try {
+    map.setSky({
+      "sky-type": "gradient",
+      "sky-gradient": ["interpolate", ["linear"], ["sky-radial-distance"], 0, p.horizon, 1, p.zenith],
+      "sky-gradient-center": [0, 0], "sky-gradient-radius": 90, "sky-opacity": 1,
+    });
+  } catch { /* this MapLibre version/style doesn't support the sky layer — the map still works without it */ }
 }
 
 /* ---------------- custom category markers — designed shapes, not generic pins ---------------- */
@@ -1646,14 +1794,49 @@ function getMarkerCategory(e) {
   return null; // no custom category marker for this entity — falls back to the existing EntityPin
 }
 
-function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
+/**
+ * The player's own avatar — a real 3D model (Kenney's CC0 Mini Characters, GLB
+ * format) rendered via <model-viewer>, not an emoji. No camera-controls attribute
+ * on purpose: this should never capture touch/drag gestures away from the map.
+ * Heading is applied as a 2D rotation of the whole marker — an honest
+ * approximation (not true 3D yaw inside the model-viewer scene), the right
+ * trade-off for something rendered at marker scale, not a full 3D character screen.
+ */
+function PlayerAvatar({ heading, avatarModel = "character-male-a" }) {
+  return (
+    <div style={{ position: "relative", width: 56, height: 64, display: "flex", flexDirection: "column",
+      alignItems: "center", transform: heading != null ? `rotate(${heading}deg)` : "none", transformOrigin: "50% 50%" }}>
+      <div style={{ width: 56, height: 56, borderRadius: "50%", overflow: "hidden", background: "#1a1420cc",
+        border: "3px solid #5BD9E8", boxShadow: "0 0 12px 3px #5BD9E888" }}>
+        {/* eslint-disable-next-line react/no-unknown-property */}
+        <model-viewer src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 75deg 2.2m" disable-zoom
+          interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
+      </div>
+      {heading != null && (
+        <div style={{ width: 0, height: 0, marginTop: -3, borderLeft: "6px solid transparent",
+          borderRight: "6px solid transparent", borderBottom: "10px solid #5BD9E8", filter: "drop-shadow(0 0 3px #5BD9E8)" }} />
+      )}
+    </div>
+  );
+}
+
+function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, avatarModel, onCollectDrop }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]); // { marker, root } — so React roots get cleanly unmounted, not leaked
+  const avatarRef = useRef(null); // { marker, root } — the player's own avatar, separate from entity markers
+  const hasArrivedRef = useRef(false); // gates the one-time arrival flyTo vs. ongoing quick follow
+  // The map's zoom/rotate handlers are attached once, in an empty-dependency effect —
+  // without these refs, they'd close over playerPosition/interior's initial (null)
+  // values forever, never seeing real updates. Refs always read current.
+  const playerPositionRef = useRef(playerPosition);
+  const interiorForCameraRef = useRef(null);
+  useEffect(() => { playerPositionRef.current = playerPosition; }, [playerPosition]);
   const [zoom, setZoom] = useState(LOD_DISTRICT - 1);
   const [interior, setInterior] = useState(null);
   const [mapReady, setMapReady] = useState(false);
   const [night, setNight] = useState(isNightNow());
+  useEffect(() => { interiorForCameraRef.current = interior; }, [interior]);
 
   const districts = useMemo(() => buildDistricts(nodes, homeBase), [nodes, homeBase]);
   const tier = computeTier(zoom, interior);
@@ -1662,7 +1845,10 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
   // a living city, not a flat navigation map. Centered on the player's actual home
   // base (real geolocation, with an Atlanta fallback). minZoom + maxBounds are what
   // actually LOCK gameplay to neighborhood scale — not just a starting position,
-  // a structural limit on how far out/away you can go.
+  // a structural limit on how far out/away you can go. dragPan is deliberately
+  // disabled: the camera should only move by following the real player (see the
+  // playerPosition effect below), not by free dragging — you can still rotate
+  // (twist gesture) and pinch-zoom, just not pan away from where you actually are.
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     const boundsRadius = 0.018; // roughly ~2km — keeps panning within the surrounding blocks, not the whole city
@@ -1672,38 +1858,67 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
     const viewportHeight = containerRef.current.clientHeight || 600;
     const map = new maplibregl.Map({
       container: containerRef.current, style: MAP_STYLE_URL,
-      center: [homeBase.lng, homeBase.lat], zoom: DEFAULT_ZOOM,
+      // Starts at a wider establishing view — "camera flies smoothly to the
+      // player's location" only means something if it isn't already there.
+      // The real arrival flyTo (below) carries it into the actual gameplay
+      // position once GPS resolves, instead of snapping there instantly.
+      center: [homeBase.lng, homeBase.lat], zoom: ZOOM_MIN,
       // CRITICAL: MapLibre's default maxPitch cap is 60° — setting pitch above that
       // without also raising maxPitch gets silently clamped back down to 60, and
       // nothing about "increase the pitch toward the horizon" would actually happen.
-      pitch: 72, maxPitch: 82, minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX, attributionControl: false,
+      pitch: 45, maxPitch: 82, minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX, attributionControl: false,
+      dragPan: false, // camera follows the player instead of being freely draggable
       padding: { top: viewportHeight * 0.38, bottom: 0, left: 0, right: 0 },
       maxBounds: [
         [homeBase.lng - boundsRadius, homeBase.lat - boundsRadius],
         [homeBase.lng + boundsRadius, homeBase.lat + boundsRadius],
       ],
     });
-    map.on("zoom", () => setZoom(map.getZoom()));
+    // Keeps the avatar pinned at the exact center through zoom and rotate gestures —
+    // MapLibre's default touch handlers pivot around the touch point (pinch midpoint,
+    // twist center), not necessarily the current map center, so without this the
+    // avatar could visibly drift off-center mid-gesture even though zoom/rotate
+    // themselves are meant to feel normal. Re-centering on every 'zoom'/'rotate' tick
+    // (fired continuously during the gesture, not just at the end) keeps the avatar
+    // as the fixed pivot throughout, not just once you let go.
+    function relockCenterOnAvatar() {
+      if (!playerPositionRef.current || interiorForCameraRef.current) return;
+      const c = map.getCenter();
+      const { lng, lat } = playerPositionRef.current;
+      if (Math.abs(c.lng - lng) > 1e-7 || Math.abs(c.lat - lat) > 1e-7) map.setCenter([lng, lat]);
+    }
+    map.on("zoom", () => { setZoom(map.getZoom()); relockCenterOnAvatar(); });
+    map.on("rotate", relockCenterOnAvatar);
     map.on("load", () => {
       setMapReady(true);
       applyArtDistrictTheme(map, isNightNow());
       addBuildingExtrusion(map, isNightNow());
       applyAtmosphere(map, isNightNow());
+      applySky(map, getTimeOfDay());
     });
     mapRef.current = map;
-    return () => { map.remove(); mapRef.current = null; };
+    return () => {
+      if (avatarRef.current) { avatarRef.current.root.unmount(); avatarRef.current.marker.remove(); avatarRef.current = null; }
+      map.remove(); mapRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Real-time day/night check — re-applies the palette and atmosphere if the hour
-  // actually changes while the app is open (checked every 5 minutes, not a
-  // continuous shader).
+  // Real-time day/night/morning check — re-applies the palette, atmosphere, and
+  // sky if the time-of-day actually changes while the app is open (checked every
+  // 5 minutes, not a continuous shader).
+  const [timeOfDay, setTimeOfDay] = useState(getTimeOfDay());
   useEffect(() => {
     const id = setInterval(() => {
       const n = isNightNow();
+      const t = getTimeOfDay();
       setNight(prevNight => {
         if (n !== prevNight && mapRef.current) { applyArtDistrictTheme(mapRef.current, n); applyAtmosphere(mapRef.current, n); }
         return n;
+      });
+      setTimeOfDay(prevT => {
+        if (t !== prevT && mapRef.current) applySky(mapRef.current, t);
+        return t;
       });
     }, 5 * 60 * 1000);
     return () => clearInterval(id);
@@ -1716,6 +1931,44 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
     if (mapRef.current && mapReady) updateEntityHighlights(mapRef.current, districts, interior?.id);
   }, [districts, mapReady, interior]);
 
+  // The player's own avatar — a real GPS-located marker, separate from entity
+  // markers, that moves and rotates to face the direction of travel as real
+  // position updates arrive. The camera smoothly follows it (easeTo, not a jarring
+  // re-fly on every tiny GPS tick) — this IS "the camera can only move slightly":
+  // dragPan is off, so the only way the view moves is by tracking the real player.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !playerPosition) return;
+    if (!avatarRef.current) {
+      const el = document.createElement("div");
+      const root = ReactDOM.createRoot(el);
+      avatarRef.current = { marker: new maplibregl.Marker({ element: el }).setLngLat([playerPosition.lng, playerPosition.lat]).addTo(map), root };
+    } else {
+      avatarRef.current.marker.setLngLat([playerPosition.lng, playerPosition.lat]);
+    }
+    avatarRef.current.root.render(<PlayerAvatar heading={playerPosition.heading} avatarModel={avatarModel} />);
+    if (!interior) {
+      if (!hasArrivedRef.current) {
+        // The arrival sequence: camera flies smoothly from the wide establishing
+        // view down into the real gameplay position — a deliberate moment, not an
+        // instant snap. Bearing starts matching the real heading if known ("camera
+        // starts behind the player"); if heading isn't known yet, bearing is left
+        // as-is rather than guessing a direction.
+        hasArrivedRef.current = true;
+        map.flyTo({
+          center: [playerPosition.lng, playerPosition.lat], zoom: DEFAULT_ZOOM, pitch: 72,
+          bearing: playerPosition.heading != null ? playerPosition.heading : map.getBearing(),
+          duration: 2600, essential: true,
+        });
+      } else {
+        // Only follows (recenters) while not inside a specific entity's interior
+        // scene — walking around shouldn't yank you out of something you're
+        // currently viewing.
+        map.easeTo({ center: [playerPosition.lng, playerPosition.lat], duration: 800 });
+      }
+    }
+  }, [playerPosition, mapReady, interior, avatarModel]);
+
   function flyTo(lng, lat, targetZoom, pitch) {
     mapRef.current?.flyTo({ center: [lng, lat], zoom: targetZoom, pitch: pitch ?? mapRef.current.getPitch(), duration: 600 });
   }
@@ -1727,6 +1980,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
   }
   function enterEntity(e) {
     if (e.kind === "idea") { onShowIdeas(); return; }
+    if (e.isCollectible) { onCollectDrop?.(e); return; }
     flyTo(e.lng, e.lat, LOD_INTERIOR + 0.5, 78); // near-horizon, immersive tilt right up close
     setInterior(e);
   }
@@ -1773,7 +2027,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
       {/* district-tier legend — the count/label information the old floating circles
           used to carry, now a real overlay panel instead of fictional map geometry */}
       {tier === "district" && (
-        <div style={{ position: "absolute", top: 52, left: 10, background: "#00000090", backdropFilter: "blur(6px)", borderRadius: 10,
+        <div style={{ position: "absolute", top: 64, left: 10, background: "#00000090", backdropFilter: "blur(6px)", borderRadius: 10,
           padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
           {districts.map(d => (
             <div key={d.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1801,7 +2055,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase }) {
         </div>
       )}
 
-      <div style={{ position: "absolute", top: 46, right: 10, background: "#00000088", border: "1px solid #ffffff22",
+      <div style={{ position: "absolute", top: 64, right: 10, background: "#00000088", border: "1px solid #ffffff22",
         borderRadius: 8, padding: "3px 9px", fontFamily: head, fontSize: 9.5, fontWeight: 700, color: "#fff" }}>
         {tier === "district" ? "DISTRICT VIEW" : tier === "building" ? "BUILDING VIEW" : "INTERIOR"}
       </div>
@@ -2270,7 +2524,7 @@ function Quests_({ quests, onToggle }) {
 }
 
 /* ================= PROFILE ================= */
-function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, onClearGenerated, xp = 0, unlockedAchievements = [], playerMode = "creator" }) {
+function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, onClearGenerated, xp = 0, unlockedAchievements = [], playerMode = "creator", isAdmin = false }) {
   const meta = { Career: Briefcase, Inventory: ImageIcon, Finances: DollarSign, Relationships: Users, Health: Heart, Time: Clock };
   const profileLevel = computeProfileLevel(xp);
   const badge = currentBadge(profileLevel.level);
@@ -2420,6 +2674,14 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
             </button>
           </div>
         </>
+      )}
+      {isAdmin && (
+        <button onClick={() => alert("World Builder mode isn't built yet — this is the entry point, not the tool itself.")}
+          style={{ width: "100%", marginTop: 18, padding: 12, borderRadius: 11, border: `2px solid ${T.wood}`,
+          background: "transparent", color: T.textCream, fontFamily: head, fontWeight: 700, fontSize: 13,
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          🛠 World Builder
+        </button>
       )}
       <button onClick={() => signOutUser().catch(() => {})} style={{ width: "100%", marginTop: 18, padding: 12,
         borderRadius: 11, border: `2px solid ${T.rose}66`, background: "transparent", color: T.rose,
@@ -2730,6 +2992,23 @@ function Onboarding_({ onFinish }) {
                 <FormInput label="Years creating" value={a.yearsCreating} onChange={v => set("yearsCreating", v)} type="number" placeholder="e.g. 5" />
               </>
             )}
+            <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.wood, margin: "12px 0 6px" }}>
+              Choose your avatar — this is who you'll see on the real map.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+              {AVATAR_OPTIONS.map(av => (
+                <button key={av.key} onClick={() => set("avatarModel", av.key)} style={{ padding: 4, borderRadius: 10,
+                  border: `2.5px solid ${a.avatarModel === av.key ? T.gold : T.wood}`,
+                  background: a.avatarModel === av.key ? `${T.gold}22` : "#fffaf0" }}>
+                  <div style={{ width: "100%", height: 64, borderRadius: 6, overflow: "hidden", background: "#eee" }}>
+                    {/* eslint-disable-next-line react/no-unknown-property */}
+                    <model-viewer src={`/avatars/${av.key}.glb`} camera-orbit="0deg 75deg 2.2m" disable-zoom
+                      interaction-prompt="none" style={{ width: "100%", height: "100%" }} />
+                  </div>
+                  <div style={{ fontFamily: body, fontSize: 9, marginTop: 3, color: "#5b4630" }}>{av.label}</div>
+                </button>
+              ))}
+            </div>
           </>
         )}
         {isExplorer && step === 2 && (
