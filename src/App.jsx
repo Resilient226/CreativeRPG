@@ -346,6 +346,11 @@ export default function CreativeEmpireOS() {
   const visiblePlaces = aiNpcMode ? places : places.filter(p => !p.generatedByAiMode);
   const [homeBase, setHomeBase] = useState(DEFAULT_HOME_BASE);
   const [playerPosition, setPlayerPosition] = useState(null); // { lat, lng, heading } — updates continuously
+  const [simulatedPosition, setSimulatedPosition] = useState(null); // World Builder's "jump to address" override
+  // Real GPS keeps updating in the background regardless, but while World Builder
+  // is active and a simulated position is set, that's what the avatar/camera
+  // actually use — turning World Builder off always reverts to your real position.
+  const effectivePlayerPosition = (worldBuilderActive && simulatedPosition) ? simulatedPosition : playerPosition;
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -947,9 +952,15 @@ export default function CreativeEmpireOS() {
           <MapScreen_
             nodes={allNodes} quests={quests} events={events} energy={energy}
             onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
-            playerPosition={playerPosition} avatarModel={profile?.avatarModel} onCollectDrop={collectDrop} worldBuilderActive={worldBuilderActive}
+            playerPosition={effectivePlayerPosition} avatarModel={profile?.avatarModel} onCollectDrop={collectDrop} worldBuilderActive={worldBuilderActive}
             onPublishLocation={publishWorldBuilderLocation}
-            onExitWorldBuilder={() => { setWorldBuilderActive(false); flash("Exited World Builder — back to normal play."); }}
+            onExitWorldBuilder={() => { setWorldBuilderActive(false); setSimulatedPosition(null); flash("Exited World Builder — back to your real position."); }}
+            onJumpToAddress={async (address) => {
+              const coords = await geocodeAddress(address);
+              if (!coords) { flash("Couldn't find that address."); return; }
+              setSimulatedPosition({ lat: coords.lat, lng: coords.lng, heading: null });
+              flash(`Jumped to ${address}`);
+            }}
           />
         </div>
       )}
@@ -1409,7 +1420,7 @@ function MiniStep({ icon: Icon, label }) {
 }
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
-function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder }) {
+function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder, onJumpToAddress }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const [showList, setShowList] = useState(false); // minimal UI: the deadlines/level panel is collapsed by default
@@ -1417,6 +1428,9 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
   const [wbAddress, setWbAddress] = useState("");
   const [wbBusy, setWbBusy] = useState(false);
   const [wbMsg, setWbMsg] = useState("");
+  const [wbPanelOpen, setWbPanelOpen] = useState(true);
+  const [wbJumpAddress, setWbJumpAddress] = useState("");
+  const [wbJumpBusy, setWbJumpBusy] = useState(false);
   const visible = nodes.filter(n => filter === "all" || n.kind === filter || (filter === "idea" && n.kind === "idea"));
   const peopleOnly = nodes.filter(n => n.kind === "person");
 
@@ -1492,21 +1506,44 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
             <button onClick={onExitWorldBuilder} style={{ background: "#1B140D", color: "#D9A441", border: "none",
               borderRadius: 6, padding: "3px 9px", fontFamily: head, fontWeight: 700, fontSize: 10.5 }}>EXIT</button>
           </div>
-          <div style={{ position: "absolute", bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", left: 10, right: 10,
-            background: "#00000095", backdropFilter: "blur(8px)", border: "1.5px solid #D9A441", borderRadius: 14, padding: 12 }}>
-            <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#D9A441", marginBottom: 6 }}>ADD REAL LOCATION</div>
-            <input value={wbName} onChange={e => setWbName(e.target.value)} placeholder="Name (e.g. Nina Baldwin Gallery)"
-              style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
-                color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 6 }} />
-            <input value={wbAddress} onChange={e => setWbAddress(e.target.value)} placeholder="Real street address"
-              style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
-                color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 8 }} />
-            <button onClick={publishLocation} disabled={wbBusy} style={{ width: "100%", padding: 10, borderRadius: 8, border: "none",
-              background: wbBusy ? "#6b5a2e" : "#D9A441", color: "#1B140D", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>
-              {wbBusy ? "Geocoding real address…" : "Publish"}
+
+          {!wbPanelOpen ? (
+            <button onClick={() => setWbPanelOpen(true)} style={{ position: "absolute", bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", right: 10,
+              background: "#D9A441", border: "none", borderRadius: 20, padding: "9px 16px", fontFamily: head, fontWeight: 700, fontSize: 12, color: "#1B140D" }}>
+              🛠 Builder Tools
             </button>
-            {wbMsg && <div style={{ fontFamily: body, fontSize: 11, color: "#fff", marginTop: 6 }}>{wbMsg}</div>}
-          </div>
+          ) : (
+            <div style={{ position: "absolute", bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", left: 10, right: 10,
+              background: "#00000095", backdropFilter: "blur(8px)", border: "1.5px solid #D9A441", borderRadius: 14, padding: 12, maxHeight: "48vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#D9A441" }}>BUILDER TOOLS</div>
+                <button onClick={() => setWbPanelOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, lineHeight: 1 }}>×</button>
+              </div>
+
+              <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#8FA8D9", marginBottom: 5 }}>JUMP AVATAR TO ADDRESS</div>
+              <input value={wbJumpAddress} onChange={e => setWbJumpAddress(e.target.value)} placeholder="Real street address"
+                style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
+                  color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 6 }} />
+              <button onClick={async () => { setWbJumpBusy(true); await onJumpToAddress(wbJumpAddress); setWbJumpBusy(false); }} disabled={wbJumpBusy || !wbJumpAddress.trim()}
+                style={{ width: "100%", padding: 9, borderRadius: 8, border: "none", marginBottom: 12,
+                  background: wbJumpBusy ? "#2c3a52" : "#5B8FD9", color: "#fff", fontFamily: head, fontWeight: 700, fontSize: 12 }}>
+                {wbJumpBusy ? "Finding address…" : "Jump Here"}
+              </button>
+
+              <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#D9A441", marginBottom: 5 }}>ADD REAL LOCATION</div>
+              <input value={wbName} onChange={e => setWbName(e.target.value)} placeholder="Name (e.g. Nina Baldwin Gallery)"
+                style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
+                  color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 6 }} />
+              <input value={wbAddress} onChange={e => setWbAddress(e.target.value)} placeholder="Real street address"
+                style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
+                  color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 8 }} />
+              <button onClick={publishLocation} disabled={wbBusy} style={{ width: "100%", padding: 10, borderRadius: 8, border: "none",
+                background: wbBusy ? "#6b5a2e" : "#D9A441", color: "#1B140D", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>
+                {wbBusy ? "Geocoding real address…" : "Publish"}
+              </button>
+              {wbMsg && <div style={{ fontFamily: body, fontSize: 11, color: "#fff", marginTop: 6 }}>{wbMsg}</div>}
+            </div>
+          )}
         </>
       )}
 
@@ -1605,11 +1642,11 @@ function isNightNow() {
 }
 
 const ART_DISTRICT_PALETTE = {
-  // road/roadMinor are real colors sampled directly from Kenney's City Kit (Roads)
-  // texture atlas (#8e95b3 lit asphalt, #515566/#38383d shadowed asphalt) — not
-  // estimated. No lane-marking accent color used, per direction.
-  night: { bg: "#1a1a1d", building: "#c9a878", road: "#666b80", roadMinor: "#38383d", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
-  day: { bg: "#2a2a2d", building: "#e0c29c", road: "#8e95b3", roadMinor: "#515566", water: "#1a4f4d", land: "#96b08e", label: "#fff2d8", halo: "#1a1008" },
+  // Direction shifted from realistic asphalt gray toward a brighter, more
+  // game-like look (Pokémon GO as the reference) — warm cream/tan roads, plain
+  // sky blue background, per direct request rather than the earlier moody dark theme.
+  night: { bg: "#1B3A5C", building: "#c9a878", road: "#D9C9A3", roadMinor: "#B8A67D", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
+  day: { bg: "#6EB5E8", building: "#e0c29c", road: "#F0DFC0", roadMinor: "#D9C9A3", water: "#1a4f4d", land: "#96b08e", label: "#3a2a1a", halo: "#fff8ea" },
 };
 // Non-interactive buildings sit back at partial opacity so real entity locations
 // naturally draw the eye — this is the actual mechanism behind "important places
@@ -1630,13 +1667,17 @@ const BUILDING_OPACITY_BASELINE = 0.5;
 // get 4x wider every single time that happens, compounding indefinitely instead
 // of staying at a stable 4x.
 const originalRoadWidths = {};
-function widenRoadLayer(map, layerId) {
+function widenRoadLayer(map, layerId, roadClasses) {
   try {
     if (!(layerId in originalRoadWidths)) {
       originalRoadWidths[layerId] = map.getPaintProperty(layerId, "line-width") ?? 1;
     }
     const original = originalRoadWidths[layerId];
-    map.setPaintProperty(layerId, "line-width", ["*", 4, original]);
+    // 6x, not 4x — "wide, cartoon-like roads" is a stronger statement than the
+    // earlier 4x turned out to be. Anything not a real road class (path,
+    // sidewalk, track, rail) gets width 0 — genuinely hidden, not just left
+    // thin and unstyled.
+    map.setPaintProperty(layerId, "line-width", ["match", ["get", "class"], roadClasses, ["*", 6, original], 0]);
   } catch { /* this layer may not support line-width as expected — skip it */ }
 }
 
@@ -1659,13 +1700,20 @@ function applyArtDistrictTheme(map, night) {
         map.setPaintProperty(layer.id, "fill-extrusion-height", 6);
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
-      else if (layer.type === "line" && /(motorway|trunk|primary|highway)/i.test(layer.id) && !/(path|pedestrian|sidewalk|footway|cycle|foot|steps)/i.test(layer.id)) {
-        map.setPaintProperty(layer.id, "line-color", p.road);
-        widenRoadLayer(map, layer.id);
-      }
-      else if (layer.type === "line" && /(road|street|secondary|tertiary|minor|service)/i.test(layer.id) && !/(path|pedestrian|sidewalk|footway|cycle|foot|steps)/i.test(layer.id)) {
-        map.setPaintProperty(layer.id, "line-color", p.roadMinor);
-        widenRoadLayer(map, layer.id);
+      else if (layer.type === "line" && layer["source-layer"] === "transportation") {
+        // Real road data (OpenMapTiles schema, the standard this style is built on)
+        // puts every road AND every sidewalk/footpath/cycleway inside this one
+        // layer, distinguished by a "class" property per segment — not by
+        // separate layer names. Matching on layer.id alone (the previous
+        // approach) couldn't actually tell them apart, which is why roads looked
+        // unstyled/thin and sidewalks stayed visible — both were the same bug.
+        // This colors real vehicle-road classes and makes everything else
+        // (path, track, rail, ferry) fully transparent and zero-width instead
+        // of just leaving it in its default style.
+        const MAJOR = ["motorway", "trunk", "primary"];
+        const MINOR = ["secondary", "tertiary", "minor", "service"];
+        map.setPaintProperty(layer.id, "line-color", ["match", ["get", "class"], MAJOR, p.road, MINOR, p.roadMinor, "rgba(0,0,0,0)"]);
+        widenRoadLayer(map, layer.id, [...MAJOR, ...MINOR]);
       }
       else if (layer.type === "symbol") {
         map.setPaintProperty(layer.id, "text-color", p.label);
@@ -1771,6 +1819,28 @@ function updateEntityHighlights(map, districts, selectedId) {
 }
 
 /**
+ * Makes every important location's building gently pulse — MapLibre has no
+ * built-in animation for paint properties, so this drives it with a real
+ * interval (6-7 times/second, smooth enough to read as a pulse without
+ * repainting every frame) that adds a small oscillating amount on top of each
+ * feature's real base height (22m, or 34m if selected) rather than replacing it.
+ * Returns a cleanup function to stop the interval.
+ */
+function startBuildingPulse(map) {
+  const start = Date.now();
+  const id = setInterval(() => {
+    if (!map.getLayer("entity-buildings-3d")) return;
+    const t = (Date.now() - start) / 1000;
+    const pulse = Math.sin(t * 1.8) * 2.5; // small, slow breathing amount, in meters
+    try {
+      map.setPaintProperty("entity-buildings-3d", "fill-extrusion-height",
+        ["+", pulse, ["case", ["==", ["get", "selected"], 1], 34, 22]]);
+    } catch { /* layer may not be ready yet this tick — next tick will catch up */ }
+  }, 140);
+  return () => clearInterval(id);
+}
+
+/**
  * Subtle atmospheric depth-fade so distant buildings soften into the background
  * instead of the whole city looking uniformly sharp — a real MapLibre fog/sky
  * feature (available in recent versions), not a hand-rolled effect. Defensive: if
@@ -1780,9 +1850,9 @@ function updateEntityHighlights(map, districts, selectedId) {
 function applyAtmosphere(map, night) {
   try {
     map.setFog({
-      range: [0.5, 10],
-      color: night ? "rgba(26,26,29,0.85)" : "rgba(42,42,45,0.75)",
-      "horizon-blend": 0.15,
+      range: [0.3, 3.5],
+      color: night ? "rgba(27,58,92,0.9)" : "rgba(110,181,232,0.85)",
+      "horizon-blend": 0.2,
     });
   } catch { /* fog/sky not supported by this MapLibre version or style — the map still works without it */ }
 }
@@ -1904,6 +1974,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   const isAnimatingRef = useRef(false); // true during any flyTo — guards against the center-lock fighting it
   const worldBuilderActiveRef = useRef(false);
   const originalBoundsRef = useRef(null);
+  const pulseCleanupRef = useRef(null);
   useEffect(() => { worldBuilderActiveRef.current = worldBuilderActive; }, [worldBuilderActive]);
   // The map's zoom/rotate handlers are attached once, in an empty-dependency effect —
   // without these refs, they'd close over playerPosition/interior's initial (null)
@@ -1980,7 +2051,12 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     // Tracks any programmatic camera animation (flyTo/easeTo) so the relock above
     // can get out of its way — 'movestart' with a non-gesture source means our own
     // code triggered it, not a touch gesture we still want to relock during.
-    map.on("movestart", e => { if (!e.originalEvent) isAnimatingRef.current = true; });
+    // Only clears isAnimatingRef broadly (harmless — clearing an already-false flag
+    // is a no-op). SETTING it happens explicitly around the two deliberate
+    // animations that should suppress rotation (the flyTo() helper and the arrival
+    // sequence), not here — a blanket movestart listener was also catching the
+    // routine GPS-follow easeTo, which fires every few seconds during normal play
+    // and was blocking rotation almost all the time in player mode specifically.
     map.on("moveend", () => { isAnimatingRef.current = false; });
 
     // Two-finger gesture becomes zoom-only — rotation now happens via one-finger
@@ -2015,6 +2091,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       applyArtDistrictTheme(map, isNightNow());
       addBuildingExtrusion(map, isNightNow());
       applyAtmosphere(map, isNightNow());
+      pulseCleanupRef.current = startBuildingPulse(map);
     });
     mapRef.current = map;
     return () => {
@@ -2022,6 +2099,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
+      if (pulseCleanupRef.current) pulseCleanupRef.current();
       if (avatarRef.current) { avatarRef.current.root.unmount(); avatarRef.current.marker.remove(); avatarRef.current = null; }
       map.remove(); mapRef.current = null;
     };
@@ -2164,7 +2242,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
 
   return (
     <div style={{ position: "relative", height: "100%", width: "100%",
-      background: night ? "#1a1a1d" : "#2a2a2d" }}>
+      background: night ? "#1B3A5C" : "#6EB5E8" }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* district-tier legend — the count/label information the old floating circles
