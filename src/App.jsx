@@ -1894,6 +1894,7 @@ const MARKER_ANIMATIONS = `
   @keyframes markerGlowPulse { 0%,100% { box-shadow: 0 0 8px 2px var(--glow), 0 0 2px 0 #fff8; } 50% { box-shadow: 0 0 20px 8px var(--glow), 0 0 4px 1px #fff8; } }
   @keyframes markerBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
   @keyframes markerShimmer { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.4); } }
+  @keyframes beamFlicker { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
 `;
 const CATEGORY_MARKER_STYLE = {
   gallery: { shape: "diamond", glow: "#D9A441", emoji: "🖼️" },
@@ -1918,7 +1919,12 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
     : category === "collectible" ? "markerBob 2s ease-in-out infinite, markerShimmer 1.8s ease-in-out infinite"
     : "markerGlowPulse 3s ease-in-out infinite";
   const size = selected ? 42 : 34;
+  const beamHeight = selected ? 70 : 52;
   return (
+    // MapLibre anchors a marker at the BOTTOM-CENTER of this element by default —
+    // that's deliberately where the ground-ring sits, so the icon/label float
+    // above the real geographic point the same way the reference image's beams do,
+    // instead of the icon itself marking the ground position.
     <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
       <style>{MARKER_ANIMATIONS}</style>
       <div style={{ "--glow": style.glow, width: size, height: size, background: "#1a1420ee",
@@ -1927,6 +1933,11 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
         <span style={{ transform: style.shape === "diamond" || style.shape === "star" ? "rotate(-45deg)" : "none" }}>{style.emoji}</span>
       </div>
       {label && <div style={{ background: "#000000b0", borderRadius: 5, padding: "1px 6px", fontFamily: head, fontSize: 8, color: "#fff", maxWidth: 76, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>}
+      <div style={{ width: 3, height: beamHeight, marginTop: 2,
+        background: `linear-gradient(180deg, ${style.glow}00, ${style.glow}dd 70%, ${style.glow}ff)`,
+        boxShadow: `0 0 6px 1px ${style.glow}aa`, animation: "beamFlicker 2.4s ease-in-out infinite" }} />
+      <div style={{ width: 20, height: 7, borderRadius: "50%", background: `${style.glow}55`,
+        boxShadow: `0 0 10px 3px ${style.glow}66`, marginTop: -2 }} />
     </button>
   );
 }
@@ -2233,7 +2244,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         } else {
           root.render(<EntityPin entity={e} onClick={() => enterEntity(e)} />);
         }
-        const marker = new maplibregl.Marker({ element: el }).setLngLat([e.lng, e.lat]).addTo(map);
+        const marker = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat([e.lng, e.lat]).addTo(map);
         markersRef.current.push({ marker, root });
       });
     });
