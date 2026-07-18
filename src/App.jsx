@@ -1625,6 +1625,21 @@ const BUILDING_OPACITY_BASELINE = 0.5;
  * sandboxed environment, so this needs real-device confirmation, not just a
  * syntax check, before it's trusted to look right.
  */
+// Caches each road layer's ORIGINAL width the first time it's seen — the theme
+// gets re-applied on every day/night transition, and without this the road would
+// get 4x wider every single time that happens, compounding indefinitely instead
+// of staying at a stable 4x.
+const originalRoadWidths = {};
+function widenRoadLayer(map, layerId) {
+  try {
+    if (!(layerId in originalRoadWidths)) {
+      originalRoadWidths[layerId] = map.getPaintProperty(layerId, "line-width") ?? 1;
+    }
+    const original = originalRoadWidths[layerId];
+    map.setPaintProperty(layerId, "line-width", ["*", 4, original]);
+  } catch { /* this layer may not support line-width as expected — skip it */ }
+}
+
 function applyArtDistrictTheme(map, night) {
   const p = night ? ART_DISTRICT_PALETTE.night : ART_DISTRICT_PALETTE.day;
   const style = map.getStyle();
@@ -1644,8 +1659,14 @@ function applyArtDistrictTheme(map, night) {
         map.setPaintProperty(layer.id, "fill-extrusion-height", 6);
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
-      else if (layer.type === "line" && /(motorway|trunk|primary|highway)/i.test(layer.id)) map.setPaintProperty(layer.id, "line-color", p.road);
-      else if (layer.type === "line" && /(road|street|secondary|tertiary|minor)/i.test(layer.id)) map.setPaintProperty(layer.id, "line-color", p.roadMinor);
+      else if (layer.type === "line" && /(motorway|trunk|primary|highway)/i.test(layer.id) && !/(path|pedestrian|sidewalk|footway|cycle|foot|steps)/i.test(layer.id)) {
+        map.setPaintProperty(layer.id, "line-color", p.road);
+        widenRoadLayer(map, layer.id);
+      }
+      else if (layer.type === "line" && /(road|street|secondary|tertiary|minor|service)/i.test(layer.id) && !/(path|pedestrian|sidewalk|footway|cycle|foot|steps)/i.test(layer.id)) {
+        map.setPaintProperty(layer.id, "line-color", p.roadMinor);
+        widenRoadLayer(map, layer.id);
+      }
       else if (layer.type === "symbol") {
         map.setPaintProperty(layer.id, "text-color", p.label);
         map.setPaintProperty(layer.id, "text-halo-color", p.halo);
@@ -1789,24 +1810,14 @@ function getTimeOfDay() {
 
 /**
  * Two native MapLibre sky attempts (setSky(), then a real "sky" style layer)
- * both failed to render on a real device — most likely because the background
- * layer is painted fully opaque (the Art District theme's own dark charcoal),
- * which paints over anything a sky layer tries to draw underneath it regardless
- * of add order. Rather than guess at a third native API I can't test myself,
- * this makes the background layer transparent instead, so a real CSS gradient
- * placed behind the map canvas shows through wherever there's no building/road
- * geometry to draw — a plain, verifiable technique that doesn't depend on any
- * MapLibre sky feature working at all.
+ * both failed to render on a real device. A third attempt — making the
+ * background layer transparent so a CSS gradient could show through — was also
+ * reverted: it removed ground coverage entirely, not just the empty-sky region,
+ * turning the whole visible ground blue. The background stays opaque (the real
+ * Art District ground color) until there's an actual, verified way to
+ * distinguish "empty sky above the horizon" from "the ground plane" — sky
+ * remains unsolved rather than broken in a new way each attempt.
  */
-function makeBackgroundTransparent(map) {
-  const style = map.getStyle();
-  if (!style || !style.layers) return;
-  style.layers.forEach(layer => {
-    if (layer.type === "background") {
-      try { map.setPaintProperty(layer.id, "background-color", "rgba(0,0,0,0)"); } catch { /* skip */ }
-    }
-  });
-}
 
 /* ---------------- custom category markers — designed shapes, not generic pins ---------------- */
 const MARKER_ANIMATIONS = `
@@ -1984,14 +1995,14 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     let rotateStartX = null, rotateStartBearing = null;
     const el = map.getContainer();
     function onTouchStart(e) {
-      if (e.touches.length !== 1) { rotateStartX = null; return; }
+      if (e.touches.length !== 1 || isAnimatingRef.current) { rotateStartX = null; return; }
       rotateStartX = e.touches[0].clientX;
       rotateStartBearing = map.getBearing();
     }
     function onTouchMove(e) {
-      if (rotateStartX == null || e.touches.length !== 1) return;
+      if (rotateStartX == null || e.touches.length !== 1 || isAnimatingRef.current) return;
       const dx = e.touches[0].clientX - rotateStartX;
-      map.setBearing(rotateStartBearing - dx * 0.3);
+      map.setBearing(rotateStartBearing + dx * 0.3);
     }
     function onTouchEnd(e) { if (e.touches.length !== 1) rotateStartX = null; }
     el.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -2004,7 +2015,6 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       applyArtDistrictTheme(map, isNightNow());
       addBuildingExtrusion(map, isNightNow());
       applyAtmosphere(map, isNightNow());
-      makeBackgroundTransparent(map);
     });
     mapRef.current = map;
     return () => {
@@ -2083,6 +2093,11 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
           bearing: playerPosition.heading != null ? playerPosition.heading : map.getBearing(),
           duration: 2600, essential: true,
         });
+        // Safety net: if anything (a touch, another effect) still knocked the
+        // pitch off target during the animation, correct it once flyTo's
+        // duration has elapsed rather than leaving the camera stuck flatter
+        // than intended.
+        setTimeout(() => { if (mapRef.current && Math.abs(mapRef.current.getPitch() - 72) > 1) mapRef.current.setPitch(72); }, 2700);
       } else {
         // Only follows (recenters) while not inside a specific entity's interior
         // scene, and not in World Builder free-roam — walking around shouldn't
@@ -2149,7 +2164,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
 
   return (
     <div style={{ position: "relative", height: "100%", width: "100%",
-      background: `linear-gradient(180deg, ${(SKY_PALETTE[timeOfDay] || SKY_PALETTE.day).zenith} 0%, ${(SKY_PALETTE[timeOfDay] || SKY_PALETTE.day).horizon} 45%, ${(SKY_PALETTE[timeOfDay] || SKY_PALETTE.day).horizon} 100%)` }}>
+      background: night ? "#1a1a1d" : "#2a2a2d" }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* district-tier legend — the count/label information the old floating circles
