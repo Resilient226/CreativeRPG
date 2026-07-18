@@ -373,6 +373,7 @@ export default function CreativeEmpireOS() {
   // you give me the real sign-in email to add here.
   const ADMIN_EMAILS = ["zakthecreativ@gmail.com"];
   const isAdmin = !!authUser?.email && ADMIN_EMAILS.includes(authUser.email.toLowerCase());
+  const [worldBuilderActive, setWorldBuilderActive] = useState(false);
 
   // Subscribe to real auth state — fires on sign-in, sign-out, and switching accounts.
   useEffect(() => {
@@ -690,6 +691,17 @@ export default function CreativeEmpireOS() {
     setXp(x => x + (drop.xpReward || 15));
     flash(`✨ Collected: ${drop.label} · +${drop.xpReward || 15} XP`);
   }
+  // World Builder's core workflow: name + real address in, geocoded coordinates
+  // out — never a hand-placed pin. Marked adminPlaced so it's clearly an
+  // intentionally important, curated location, not a jittered/auto-discovered one.
+  function publishWorldBuilderLocation({ name, address, lat, lng }) {
+    setPlaces(ps => [...ps, {
+      id: "wb-" + Date.now(), kind: "place", name, lat, lng, address,
+      icon: Palette, color: T.gold, category: "World Builder",
+      note: `Published via World Builder — ${address}`,
+      detailsLog: [], adminPlaced: true,
+    }]);
+  }
   function trackOpportunity(o) {
     setQuests(qs => [...qs, {
       id: "gen-" + o.id, tier: "secondary", title: `Apply: ${o.name}`,
@@ -935,13 +947,16 @@ export default function CreativeEmpireOS() {
           <MapScreen_
             nodes={allNodes} quests={quests} events={events} energy={energy}
             onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
-            playerPosition={playerPosition} avatarModel={profile?.avatarModel} onCollectDrop={collectDrop}
+            playerPosition={playerPosition} avatarModel={profile?.avatarModel} onCollectDrop={collectDrop} worldBuilderActive={worldBuilderActive}
+            onPublishLocation={publishWorldBuilderLocation}
+            onExitWorldBuilder={() => { setWorldBuilderActive(false); flash("Exited World Builder — back to normal play."); }}
           />
         </div>
       )}
       {tab === "profile" && <Profile_ confidence={confidence} onQuickAccess={onQuickAccess} skills={skills} levels={levels}
         generatedCount={contacts.filter(c => c.sim || c.generatedByAiMode).length + places.filter(p => p.generatedByAiMode).length}
-        onClearGenerated={clearGeneratedContent} xp={xp} unlockedAchievements={unlockedAchievements} playerMode={playerMode} isAdmin={isAdmin} />}
+        onClearGenerated={clearGeneratedContent} xp={xp} unlockedAchievements={unlockedAchievements} playerMode={playerMode} isAdmin={isAdmin}
+        onEnterWorldBuilder={() => { setWorldBuilderActive(true); setTab("map"); flash("🛠 World Builder active — free roam enabled."); }} />}
 
       {selectedNode && (
         <NodeSheet node={selectedNode} onClose={() => setSelectedNode(null)}
@@ -1394,10 +1409,14 @@ function MiniStep({ icon: Icon, label }) {
 }
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
-function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop }) {
+function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const [showList, setShowList] = useState(false); // minimal UI: the deadlines/level panel is collapsed by default
+  const [wbName, setWbName] = useState("");
+  const [wbAddress, setWbAddress] = useState("");
+  const [wbBusy, setWbBusy] = useState(false);
+  const [wbMsg, setWbMsg] = useState("");
   const visible = nodes.filter(n => filter === "all" || n.kind === filter || (filter === "idea" && n.kind === "idea"));
   const peopleOnly = nodes.filter(n => n.kind === "person");
 
@@ -1405,6 +1424,17 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
   const urgentEvent = events.find(e => e.requirements && isAtRisk(e.requirements, e.daysLeft));
   const lowEnergy = energy <= 3;
   const profileLevel = computeProfileLevel(xp);
+
+  async function publishLocation() {
+    if (!wbName.trim() || !wbAddress.trim()) { setWbMsg("Name and address both required."); return; }
+    setWbBusy(true); setWbMsg("");
+    const coords = await geocodeAddress(wbAddress.trim());
+    setWbBusy(false);
+    if (!coords) { setWbMsg("Couldn't find that address — try being more specific."); return; }
+    onPublishLocation({ name: wbName.trim(), address: wbAddress.trim(), lat: coords.lat, lng: coords.lng });
+    setWbMsg(`✓ Published "${wbName.trim()}" — real geocoded location, live now.`);
+    setWbName(""); setWbAddress("");
+  }
 
   // grouping logic lives in ./engines/relationshipEngine.js (groupPeopleBy)
 
@@ -1452,7 +1482,33 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       {/* the map itself — full-screen, edge to edge, the primary interface now */}
-      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} playerPosition={playerPosition} avatarModel={avatarModel} onCollectDrop={onCollectDrop} />
+      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} playerPosition={playerPosition} avatarModel={avatarModel} onCollectDrop={onCollectDrop} worldBuilderActive={worldBuilderActive} />
+
+      {worldBuilderActive && (
+        <>
+          <div style={{ position: "absolute", top: "calc(60px + env(safe-area-inset-top, 0px))", left: 10, right: 10,
+            background: "#D9A441", borderRadius: 10, padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontFamily: head, fontWeight: 800, fontSize: 11.5, color: "#1B140D" }}>🛠 WORLD BUILDER — FREE ROAM</span>
+            <button onClick={onExitWorldBuilder} style={{ background: "#1B140D", color: "#D9A441", border: "none",
+              borderRadius: 6, padding: "3px 9px", fontFamily: head, fontWeight: 700, fontSize: 10.5 }}>EXIT</button>
+          </div>
+          <div style={{ position: "absolute", bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", left: 10, right: 10,
+            background: "#00000095", backdropFilter: "blur(8px)", border: "1.5px solid #D9A441", borderRadius: 14, padding: 12 }}>
+            <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#D9A441", marginBottom: 6 }}>ADD REAL LOCATION</div>
+            <input value={wbName} onChange={e => setWbName(e.target.value)} placeholder="Name (e.g. Nina Baldwin Gallery)"
+              style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
+                color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 6 }} />
+            <input value={wbAddress} onChange={e => setWbAddress(e.target.value)} placeholder="Real street address"
+              style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
+                color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 8 }} />
+            <button onClick={publishLocation} disabled={wbBusy} style={{ width: "100%", padding: 10, borderRadius: 8, border: "none",
+              background: wbBusy ? "#6b5a2e" : "#D9A441", color: "#1B140D", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>
+              {wbBusy ? "Geocoding real address…" : "Publish"}
+            </button>
+            {wbMsg && <div style={{ fontFamily: body, fontSize: 11, color: "#fff", marginTop: 6 }}>{wbMsg}</div>}
+          </div>
+        </>
+      )}
 
       {/* minimal floating UI — one small button, not a persistent row, since Home/
           Profile now occupy the top corners. Everything else lives behind it. */}
@@ -1713,9 +1769,7 @@ function applyAtmosphere(map, night) {
 /**
  * These colors are sampled directly from the actual uploaded skybox images (Kenney's
  * "Skyboxes" pack), not estimated — zenith and horizon bands averaged from the real
- * PNGs. Honest limit: MapLibre's sky is a real, native procedural gradient/atmosphere
- * feature, not an arbitrary image texture — it can't literally wrap the PNG as a
- * skybox the way a game engine would, but it can genuinely match the same mood/colors.
+ * PNGs.
  */
 const SKY_PALETTE = {
   morning: { horizon: "#f4cdb5", zenith: "#fdedd6" },
@@ -1733,21 +1787,25 @@ function getTimeOfDay() {
   return "day";
 }
 
-function applySky(map, timeOfDay) {
-  const p = SKY_PALETTE[timeOfDay] || SKY_PALETTE.day;
-  const paint = {
-    "sky-type": "gradient",
-    "sky-gradient": ["interpolate", ["linear"], ["sky-radial-distance"], 0, p.horizon, 1, p.zenith],
-    "sky-gradient-center": [0, 0], "sky-gradient-radius": 90, "sky-opacity": 1,
-  };
-  try {
-    // The sky LAYER (part of the actual style spec, added via addLayer) is the
-    // reliable way to do this — map.setSky() is a convenience method that may not
-    // exist on every MapLibre version, and a real device confirmed it wasn't
-    // rendering. This is the same feature, added the more universally-supported way.
-    if (map.getLayer("art-district-sky")) { Object.entries(paint).forEach(([k, v]) => map.setPaintProperty("art-district-sky", k, v)); }
-    else map.addLayer({ id: "art-district-sky", type: "sky", paint });
-  } catch { /* this MapLibre version/style doesn't support the sky layer — the map still works without it */ }
+/**
+ * Two native MapLibre sky attempts (setSky(), then a real "sky" style layer)
+ * both failed to render on a real device — most likely because the background
+ * layer is painted fully opaque (the Art District theme's own dark charcoal),
+ * which paints over anything a sky layer tries to draw underneath it regardless
+ * of add order. Rather than guess at a third native API I can't test myself,
+ * this makes the background layer transparent instead, so a real CSS gradient
+ * placed behind the map canvas shows through wherever there's no building/road
+ * geometry to draw — a plain, verifiable technique that doesn't depend on any
+ * MapLibre sky feature working at all.
+ */
+function makeBackgroundTransparent(map) {
+  const style = map.getStyle();
+  if (!style || !style.layers) return;
+  style.layers.forEach(layer => {
+    if (layer.type === "background") {
+      try { map.setPaintProperty(layer.id, "background-color", "rgba(0,0,0,0)"); } catch { /* skip */ }
+    }
+  });
 }
 
 /* ---------------- custom category markers — designed shapes, not generic pins ---------------- */
@@ -1826,13 +1884,16 @@ function PlayerAvatar({ heading, avatarModel = "character-male-a" }) {
   );
 }
 
-function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, avatarModel, onCollectDrop }) {
+function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, avatarModel, onCollectDrop, worldBuilderActive }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]); // { marker, root } — so React roots get cleanly unmounted, not leaked
   const avatarRef = useRef(null); // { marker, root } — the player's own avatar, separate from entity markers
   const hasArrivedRef = useRef(false); // gates the one-time arrival flyTo vs. ongoing quick follow
   const isAnimatingRef = useRef(false); // true during any flyTo — guards against the center-lock fighting it
+  const worldBuilderActiveRef = useRef(false);
+  const originalBoundsRef = useRef(null);
+  useEffect(() => { worldBuilderActiveRef.current = worldBuilderActive; }, [worldBuilderActive]);
   // The map's zoom/rotate handlers are attached once, in an empty-dependency effect —
   // without these refs, they'd close over playerPosition/interior's initial (null)
   // values forever, never seeing real updates. Refs always read current.
@@ -1863,6 +1924,11 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     // third of the screen, Pokémon GO style — a plain top-padding trick, not a
     // different projection.
     const viewportHeight = containerRef.current.clientHeight || 600;
+    const initialBounds = [
+      [homeBase.lng - boundsRadius, homeBase.lat - boundsRadius],
+      [homeBase.lng + boundsRadius, homeBase.lat + boundsRadius],
+    ];
+    originalBoundsRef.current = initialBounds;
     const map = new maplibregl.Map({
       container: containerRef.current, style: MAP_STYLE_URL,
       // Starts at a wider establishing view — "camera flies smoothly to the
@@ -1874,12 +1940,9 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       // without also raising maxPitch gets silently clamped back down to 60, and
       // nothing about "increase the pitch toward the horizon" would actually happen.
       pitch: 60, maxPitch: 82, minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX, attributionControl: false,
-      dragPan: false, // camera follows the player instead of being freely draggable
+      dragPan: false, // camera follows the player instead of being freely draggable — World Builder re-enables this
       padding: { top: viewportHeight * 0.38, bottom: 0, left: 0, right: 0 },
-      maxBounds: [
-        [homeBase.lng - boundsRadius, homeBase.lat - boundsRadius],
-        [homeBase.lng + boundsRadius, homeBase.lat + boundsRadius],
-      ],
+      maxBounds: initialBounds,
     });
     // Keeps the avatar pinned at the exact center through zoom and rotate gestures —
     // MapLibre's default touch handlers pivot around the touch point (pinch midpoint,
@@ -1895,6 +1958,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       // short before it reaches its real target (this is what was likely capping
       // the arrival sequence at a flatter pitch than intended).
       if (isAnimatingRef.current) return;
+      if (worldBuilderActiveRef.current) return; // free roam — no GPS lock at all
       if (!playerPositionRef.current || interiorForCameraRef.current) return;
       const c = map.getCenter();
       const { lng, lat } = playerPositionRef.current;
@@ -1907,20 +1971,63 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     // code triggered it, not a touch gesture we still want to relock during.
     map.on("movestart", e => { if (!e.originalEvent) isAnimatingRef.current = true; });
     map.on("moveend", () => { isAnimatingRef.current = false; });
+
+    // Two-finger gesture becomes zoom-only — rotation now happens via one-finger
+    // drag instead (below), so pinch shouldn't also rotate at the same time.
+    map.touchZoomRotate.disableRotation();
+
+    // Custom one-finger-drag-to-rotate: MapLibre's default touch mapping doesn't
+    // offer this combination (single-finger = pan, two-finger twist = rotate) out
+    // of the box, and dragPan is already off, so single-finger drag currently does
+    // nothing without this. Only engages for exactly one touch — a second touch
+    // starting mid-gesture hands off to the native pinch-zoom handler instead.
+    let rotateStartX = null, rotateStartBearing = null;
+    const el = map.getContainer();
+    function onTouchStart(e) {
+      if (e.touches.length !== 1) { rotateStartX = null; return; }
+      rotateStartX = e.touches[0].clientX;
+      rotateStartBearing = map.getBearing();
+    }
+    function onTouchMove(e) {
+      if (rotateStartX == null || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - rotateStartX;
+      map.setBearing(rotateStartBearing - dx * 0.3);
+    }
+    function onTouchEnd(e) { if (e.touches.length !== 1) rotateStartX = null; }
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+
     map.on("load", () => {
       setMapReady(true);
       applyArtDistrictTheme(map, isNightNow());
       addBuildingExtrusion(map, isNightNow());
       applyAtmosphere(map, isNightNow());
-      applySky(map, getTimeOfDay());
+      makeBackgroundTransparent(map);
     });
     mapRef.current = map;
     return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
       if (avatarRef.current) { avatarRef.current.root.unmount(); avatarRef.current.marker.remove(); avatarRef.current = null; }
       map.remove(); mapRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The actual free-roam mechanism: World Builder disables the GPS lock for real
+  // (re-enables dragging, removes the bounds restriction) rather than just hiding
+  // a UI element. Turning it back off restores the exact original bounds, not a
+  // freshly-recomputed one, so normal play resumes exactly where it left off.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (worldBuilderActive) { map.dragPan.enable(); map.setMaxBounds(null); }
+    else { map.dragPan.disable(); map.setMaxBounds(originalBoundsRef.current); }
+  }, [worldBuilderActive, mapReady]);
 
   // Real-time day/night/morning check — re-applies the palette, atmosphere, and
   // sky if the time-of-day actually changes while the app is open (checked every
@@ -1934,10 +2041,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         if (n !== prevNight && mapRef.current) { applyArtDistrictTheme(mapRef.current, n); applyAtmosphere(mapRef.current, n); }
         return n;
       });
-      setTimeOfDay(prevT => {
-        if (t !== prevT && mapRef.current) applySky(mapRef.current, t);
-        return t;
-      });
+      setTimeOfDay(t);
     }, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
@@ -1981,12 +2085,14 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         });
       } else {
         // Only follows (recenters) while not inside a specific entity's interior
-        // scene — walking around shouldn't yank you out of something you're
-        // currently viewing.
-        map.easeTo({ center: [playerPosition.lng, playerPosition.lat], duration: 800 });
+        // scene, and not in World Builder free-roam — walking around shouldn't
+        // yank you out of something you're viewing, and free-roam shouldn't keep
+        // snapping back to your real position while you're deliberately exploring
+        // away from it.
+        if (!worldBuilderActive) map.easeTo({ center: [playerPosition.lng, playerPosition.lat], duration: 800 });
       }
     }
-  }, [playerPosition, mapReady, interior, avatarModel]);
+  }, [playerPosition, mapReady, interior, avatarModel, worldBuilderActive]);
 
   function flyTo(lng, lat, targetZoom, pitch) {
     if (!mapRef.current) return;
@@ -2042,7 +2148,8 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   }, [districts, tier, mapReady, interior]);
 
   return (
-    <div style={{ position: "relative", height: "100%", width: "100%", background: night ? "#0d1420" : "#3a2a24" }}>
+    <div style={{ position: "relative", height: "100%", width: "100%",
+      background: `linear-gradient(180deg, ${(SKY_PALETTE[timeOfDay] || SKY_PALETTE.day).zenith} 0%, ${(SKY_PALETTE[timeOfDay] || SKY_PALETTE.day).horizon} 45%, ${(SKY_PALETTE[timeOfDay] || SKY_PALETTE.day).horizon} 100%)` }}>
       <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
 
       {/* district-tier legend — the count/label information the old floating circles
@@ -2545,7 +2652,7 @@ function Quests_({ quests, onToggle }) {
 }
 
 /* ================= PROFILE ================= */
-function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, onClearGenerated, xp = 0, unlockedAchievements = [], playerMode = "creator", isAdmin = false }) {
+function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, onClearGenerated, xp = 0, unlockedAchievements = [], playerMode = "creator", isAdmin = false, onEnterWorldBuilder }) {
   const meta = { Career: Briefcase, Inventory: ImageIcon, Finances: DollarSign, Relationships: Users, Health: Heart, Time: Clock };
   const profileLevel = computeProfileLevel(xp);
   const badge = currentBadge(profileLevel.level);
@@ -2697,7 +2804,7 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
         </>
       )}
       {isAdmin && (
-        <button onClick={() => alert("World Builder mode isn't built yet — this is the entry point, not the tool itself.")}
+        <button onClick={onEnterWorldBuilder}
           style={{ width: "100%", marginTop: 18, padding: 12, borderRadius: 11, border: `2px solid ${T.wood}`,
           background: "transparent", color: T.textCream, fontFamily: head, fontWeight: 700, fontSize: 13,
           display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
