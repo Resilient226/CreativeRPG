@@ -347,10 +347,6 @@ export default function CreativeEmpireOS() {
   const [homeBase, setHomeBase] = useState(DEFAULT_HOME_BASE);
   const [playerPosition, setPlayerPosition] = useState(null); // { lat, lng, heading } — updates continuously
   const [simulatedPosition, setSimulatedPosition] = useState(null); // World Builder's "jump to address" override
-  // Real GPS keeps updating in the background regardless, but while World Builder
-  // is active and a simulated position is set, that's what the avatar/camera
-  // actually use — turning World Builder off always reverts to your real position.
-  const effectivePlayerPosition = (worldBuilderActive && simulatedPosition) ? simulatedPosition : playerPosition;
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -379,6 +375,10 @@ export default function CreativeEmpireOS() {
   const ADMIN_EMAILS = ["zakthecreativ@gmail.com"];
   const isAdmin = !!authUser?.email && ADMIN_EMAILS.includes(authUser.email.toLowerCase());
   const [worldBuilderActive, setWorldBuilderActive] = useState(false);
+  // Real GPS keeps updating in the background regardless, but while World Builder
+  // is active and a simulated position is set, that's what the avatar/camera
+  // actually use — turning World Builder off always reverts to your real position.
+  const effectivePlayerPosition = (worldBuilderActive && simulatedPosition) ? simulatedPosition : playerPosition;
 
   // Subscribe to real auth state — fires on sign-in, sign-out, and switching accounts.
   useEffect(() => {
