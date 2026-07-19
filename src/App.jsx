@@ -17,6 +17,8 @@ import { runCareerDirector } from "./engines/careerDirector";
 import { driftNpcOverTime, generatePublicProfile } from "./engines/npcEngine";
 import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation, ACHIEVEMENTS } from "./engines/artistProfileEngine";
 import { buildCreativeDrop, getRevealedDrops } from "./engines/collectiblesEngine";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   Home as HomeIcon, Swords, Plus, Globe, User, Bell, Briefcase, Image as ImageIcon,
   DollarSign, Users, Heart, Clock, ChevronRight, ChevronLeft, ChevronDown, Check, X, Star, Lock,
@@ -1813,6 +1815,95 @@ function updateEntityHighlights(map, districts, selectedId) {
 }
 
 /**
+ * Embeds real 3D building models INSIDE the map's actual 3D scene, at real
+ * ground level and real geographic scale — not a floating marker icon. This is
+ * the standard, documented technique for placing a real GLTF/GLB model into a
+ * MapLibre scene: a "custom layer" that shares MapLibre's own WebGL context with
+ * a Three.js renderer, so the model is drawn using the map's real projection
+ * matrix on every frame, the same way MapLibre draws its own buildings/roads.
+ *
+ * Honest limit: I cannot render WebGL or verify 3D math visually from this
+ * sandbox. This follows the well-established MapLibre/Mapbox official pattern
+ * for this exact use case as precisely as I can, but it genuinely needs a real
+ * device to confirm the positioning/scale/orientation actually looks right —
+ * this is meaningfully more complex than anything else built for this map so far.
+ */
+function createBuildingModelsLayer() {
+  const gltfCache = {}; // buildingModel key -> loaded THREE.Group template, cloned per placed instance
+  const placed = new Map(); // entity.id -> the THREE.Object3D currently in the scene
+  const loader = new GLTFLoader();
+
+  return {
+    id: "building-models-3d",
+    type: "custom",
+    renderingMode: "3d",
+    onAdd(map, gl) {
+      this.map = map;
+      this.camera = new THREE.Camera();
+      this.scene = new THREE.Scene();
+      this.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+      const sun = new THREE.DirectionalLight(0xffffff, 0.55);
+      sun.position.set(0, -1, 1);
+      this.scene.add(sun);
+      this.renderer = new THREE.WebGLRenderer({ canvas: map.getCanvas(), context: gl, antialias: true });
+      this.renderer.autoClear = false;
+    },
+    render(gl, matrix) {
+      this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
+      this.renderer.resetState();
+      this.renderer.render(this.scene, this.camera);
+      this.map.triggerRepaint();
+    },
+    // Not part of MapLibre's custom-layer interface — called manually (from
+    // WorldEngine_) whenever the entity list changes, to add/remove/reposition
+    // the actual building models.
+    updateEntities(districts) {
+      const seenIds = new Set();
+      districts.forEach(d => {
+        d.entities.forEach(e => {
+          const category = getMarkerCategory(e);
+          const style = CATEGORY_MARKER_STYLE[category];
+          if (!style || !style.buildingModel) return;
+          seenIds.add(e.id);
+          if (placed.has(e.id)) return; // already positioned — entities don't move
+
+          const placeAt = (templateScene) => {
+            // Real ground position and real-world scale — maplibregl.MercatorCoordinate
+            // converts an actual lat/lng into the map's internal projection space, and
+            // meterInMercatorCoordinateUnits() gives the correct scale factor at that
+            // specific latitude (Mercator projection distorts scale, so this isn't a
+            // constant — it has to be computed per-location).
+            const merc = maplibregl.MercatorCoordinate.fromLngLat([e.lng, e.lat], 0);
+            const scale = merc.meterInMercatorCoordinateUnits();
+            const model = templateScene.clone();
+            model.position.set(merc.x, merc.y, merc.z);
+            // Standard Y-up (Three.js) to Mercator-space correction — the
+            // established pattern for this exact integration, not an arbitrary guess.
+            model.rotation.x = Math.PI / 2;
+            model.scale.set(scale, -scale, scale);
+            this.scene.add(model);
+            placed.set(e.id, model);
+          };
+
+          if (gltfCache[style.buildingModel]) { placeAt(gltfCache[style.buildingModel]); }
+          else {
+            loader.load(`/buildings/${style.buildingModel}.glb`, gltf => {
+              gltfCache[style.buildingModel] = gltf.scene;
+              placeAt(gltf.scene);
+              this.map.triggerRepaint();
+            }, undefined, () => { /* model failed to load — entity just has no embedded building, not a crash */ });
+          }
+        });
+      });
+      // Remove anything no longer in the entity list.
+      for (const [id, model] of placed) {
+        if (!seenIds.has(id)) { this.scene.remove(model); placed.delete(id); }
+      }
+    },
+  };
+}
+
+/**
  * Makes every important location's building gently pulse — MapLibre has no
  * built-in animation for paint properties, so this drives it with a real
  * interval (6-7 times/second, smooth enough to read as a pulse without
@@ -1893,31 +1984,22 @@ const MARKER_ANIMATIONS = `
   @keyframes avatarIdleSway { 0%,100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
 `;
 const CATEGORY_MARKER_STYLE = {
-  gallery: { shape: "diamond", glow: "#D9A441", emoji: "🖼️", buildingModel: "building-a" },
-  museum: { shape: "column", glow: "#5B8FD9", emoji: "🏛️", buildingModel: "building-b" },
-  public_art: { shape: "blob", glow: "#C25BD9", emoji: "🎨", buildingModel: "building-c" },
-  venue: { shape: "circle", glow: "#E0955B", emoji: "☕", buildingModel: "building-d" },
-  milestone: { shape: "star", glow: "#F0567A", emoji: "🎉" },
-  collectible: { shape: "hex", glow: "#5BD9B0", emoji: "✨" },
-  person: { shape: "circle", glow: "#5BD9E8", emoji: "🧑" },
-  opportunity: { shape: "star", glow: "#D9A441", emoji: "🎯" },
-  place: { shape: "diamond", glow: "#D9A441", emoji: "📍", buildingModel: "building-e" }, // generic default — nothing falls through beam-less anymore
+  gallery: { glow: "#D9A441", emoji: "🖼️", buildingModel: "building-a" },
+  museum: { glow: "#5B8FD9", emoji: "🏛️", buildingModel: "building-b" },
+  public_art: { glow: "#C25BD9", emoji: "🎨", buildingModel: "building-c" },
+  venue: { glow: "#E0955B", emoji: "☕", buildingModel: "building-d" },
+  milestone: { glow: "#F0567A", emoji: "🎉" },
+  collectible: { glow: "#5BD9B0", emoji: "✨" },
+  person: { glow: "#5BD9E8", emoji: "🧑" },
+  opportunity: { glow: "#D9A441", emoji: "🎯" },
+  place: { glow: "#D9A441", emoji: "📍", buildingModel: "building-e" }, // generic default — nothing falls through beam-less anymore
 };
 function CustomCategoryMarker({ category, onClick, label, selected = false }) {
   const style = CATEGORY_MARKER_STYLE[category] || CATEGORY_MARKER_STYLE.gallery;
-  const shapeStyle = {
-    diamond: { borderRadius: 6, transform: "rotate(45deg)" },
-    column: { borderRadius: "4px 4px 0 0" },
-    blob: { borderRadius: "60% 40% 55% 45% / 50% 60% 40% 50%" },
-    circle: { borderRadius: "50%" },
-    star: { borderRadius: "30%", transform: "rotate(15deg)" },
-    hex: { clipPath: "polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0% 50%)" },
-  }[style.shape];
   const animation = selected ? "markerGlowPulse 0.9s ease-in-out infinite"
     : category === "milestone" ? "markerGlowPulse 1.6s ease-in-out infinite"
     : category === "collectible" ? "markerBob 2s ease-in-out infinite, markerShimmer 1.8s ease-in-out infinite"
     : "markerGlowPulse 3s ease-in-out infinite";
-  const size = selected ? 56 : 44;
   const beamHeight = selected ? 70 : 52;
   return (
     // MapLibre anchors a marker at the BOTTOM-CENTER of this element by default —
@@ -1926,23 +2008,16 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
     // instead of the icon itself marking the ground position.
     <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
       <style>{MARKER_ANIMATIONS}</style>
-      {style.buildingModel ? (
-        // A real 3D building model (Kenney's CC0 City Kit Commercial pack) for
-        // genuine place categories — no camera-controls, same reasoning as the
-        // avatar: this should never capture touch/drag gestures away from the map.
-        <div style={{ "--glow": style.glow, width: size + 14, height: size + 14, borderRadius: 10,
-          background: "#1a1420ee", border: `${selected ? 3 : 2}px solid ${selected ? "#fff" : style.glow}`,
-          animation, overflow: "hidden" }}>
-          {/* eslint-disable-next-line react/no-unknown-property */}
-          <model-viewer src={`/buildings/${style.buildingModel}.glb`} camera-orbit="35deg 75deg 105%" disable-zoom
-            interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
-        </div>
-      ) : (
-        <div style={{ "--glow": style.glow, width: size, height: size, background: "#1a1420ee",
-          border: `${selected ? 3 : 2}px solid ${selected ? "#fff" : style.glow}`,
-          display: "flex", alignItems: "center", justifyContent: "center", fontSize: selected ? 18 : 15, animation, ...shapeStyle }}>
-          <span style={{ transform: style.shape === "diamond" || style.shape === "star" ? "rotate(-45deg)" : "none" }}>{style.emoji}</span>
-        </div>
+      {/* Categories with a real buildingModel show no floating icon at all —
+          the actual 3D building is now embedded at ground level via the custom
+          layer (createBuildingModelsLayer), not duplicated here as a floating
+          copy. The beam + label below still provide the click target and the
+          "this is important" visual cue. */}
+      {!style.buildingModel && (
+        <span style={{ "--glow": style.glow, fontSize: selected ? 30 : 24, animation,
+          filter: `drop-shadow(0 0 6px ${style.glow}) drop-shadow(0 0 10px ${style.glow}88)` }}>
+          {style.emoji}
+        </span>
       )}
       {label && <div style={{ background: "#000000b0", borderRadius: 5, padding: "1px 6px", fontFamily: head, fontSize: 8, color: "#fff", maxWidth: 76, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>}
       <div style={{ width: 3, height: beamHeight, marginTop: 2,
@@ -1990,7 +2065,11 @@ function PlayerAvatar({ heading, avatarModel = "character-male-a", isMoving = fa
         border: "3px solid #5BD9E8", boxShadow: "0 0 12px 3px #5BD9E888",
         animation: isMoving ? "avatarWalkBob 0.5s ease-in-out infinite" : "avatarIdleSway 2.4s ease-in-out infinite" }}>
         {/* eslint-disable-next-line react/no-unknown-property */}
-        <model-viewer src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 82deg 2.6m" disable-zoom
+        {/* orientation corrects an up-axis mismatch that was rendering the
+            model upside down — common with FBX-derived GLB exports where the
+            source tool's up-axis convention doesn't match what model-viewer
+            expects by default. */}
+        <model-viewer src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 82deg 2.6m" orientation="180deg 0deg 0deg" disable-zoom
           interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
       </div>
       {heading != null && (
@@ -2011,6 +2090,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   const worldBuilderActiveRef = useRef(false);
   const originalBoundsRef = useRef(null);
   const pulseCleanupRef = useRef(null);
+  const buildingLayerRef = useRef(null);
   useEffect(() => { worldBuilderActiveRef.current = worldBuilderActive; }, [worldBuilderActive]);
   // The map's zoom/rotate handlers are attached once, in an empty-dependency effect —
   // without these refs, they'd close over playerPosition/interior's initial (null)
@@ -2153,6 +2233,8 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       addBuildingExtrusion(map, isNightNow());
       applyAtmosphere(map, isNightNow());
       pulseCleanupRef.current = startBuildingPulse(map);
+      buildingLayerRef.current = createBuildingModelsLayer();
+      try { map.addLayer(buildingLayerRef.current); } catch { /* custom layers require WebGL2 in some environments — map still works without embedded buildings */ }
     });
     mapRef.current = map;
     return () => {
@@ -2200,6 +2282,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   // updated live rather than only set once.
   useEffect(() => {
     if (mapRef.current && mapReady) updateEntityHighlights(mapRef.current, districts, interior?.id);
+    if (buildingLayerRef.current) buildingLayerRef.current.updateEntities(districts);
   }, [districts, mapReady, interior]);
 
   // The player's own avatar — a real GPS-located marker, separate from entity
