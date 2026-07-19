@@ -347,6 +347,7 @@ export default function CreativeEmpireOS() {
   const [homeBase, setHomeBase] = useState(DEFAULT_HOME_BASE);
   const [playerPosition, setPlayerPosition] = useState(null); // { lat, lng, heading } — updates continuously
   const [simulatedPosition, setSimulatedPosition] = useState(null); // World Builder's "jump to address" override
+  const [jumpTrigger, setJumpTrigger] = useState(0); // increments on each deliberate jump — distinguishes it from routine GPS updates
   const [selectedNode, setSelectedNode] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [editingNode, setEditingNode] = useState(null);
@@ -953,12 +954,13 @@ export default function CreativeEmpireOS() {
             nodes={allNodes} quests={quests} events={events} energy={energy}
             onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
             playerPosition={effectivePlayerPosition} avatarModel={profile?.avatarModel} onCollectDrop={collectDrop} worldBuilderActive={worldBuilderActive}
-            onPublishLocation={publishWorldBuilderLocation}
+            onPublishLocation={publishWorldBuilderLocation} jumpTrigger={jumpTrigger}
             onExitWorldBuilder={() => { setWorldBuilderActive(false); setSimulatedPosition(null); flash("Exited World Builder — back to your real position."); }}
             onJumpToAddress={async (address) => {
               const coords = await geocodeAddress(address);
               if (!coords) { flash("Couldn't find that address."); return; }
               setSimulatedPosition({ lat: coords.lat, lng: coords.lng, heading: null });
+              setJumpTrigger(t => t + 1);
               flash(`Jumped to ${address}`);
             }}
           />
@@ -1420,7 +1422,7 @@ function MiniStep({ icon: Icon, label }) {
 }
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
-function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder, onJumpToAddress }) {
+function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder, onJumpToAddress, jumpTrigger }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const [showList, setShowList] = useState(false); // minimal UI: the deadlines/level panel is collapsed by default
@@ -1496,7 +1498,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       {/* the map itself — full-screen, edge to edge, the primary interface now */}
-      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} playerPosition={playerPosition} avatarModel={avatarModel} onCollectDrop={onCollectDrop} worldBuilderActive={worldBuilderActive} />
+      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} playerPosition={playerPosition} avatarModel={avatarModel} onCollectDrop={onCollectDrop} worldBuilderActive={worldBuilderActive} jumpTrigger={jumpTrigger} />
 
       {worldBuilderActive && (
         <>
@@ -1780,12 +1782,7 @@ function updateEntityHighlights(map, districts, selectedId) {
     type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] },
     properties: { selected: e.id === selectedId ? 1 : 0, color: T[d.colorKey] || "#D9A441" },
   })));
-  const buildingFeatures = districts.flatMap(d => d.entities.map(e => ({
-    type: "Feature", geometry: { type: "Polygon", coordinates: squareAround(e.lat, e.lng, 4) },
-    properties: { selected: e.id === selectedId ? 1 : 0, color: T[d.colorKey] || "#D9A441" },
-  })));
   const haloGeojson = { type: "FeatureCollection", features: haloFeatures };
-  const buildingGeojson = { type: "FeatureCollection", features: buildingFeatures };
   try {
     const existingHalo = map.getSource("entity-highlights");
     if (existingHalo) { existingHalo.setData(haloGeojson); }
@@ -1801,20 +1798,11 @@ function updateEntityHighlights(map, districts, selectedId) {
         },
       });
     }
-    const existingBuildings = map.getSource("entity-buildings");
-    if (existingBuildings) { existingBuildings.setData(buildingGeojson); }
-    else {
-      map.addSource("entity-buildings", { type: "geojson", data: buildingGeojson });
-      map.addLayer({
-        id: "entity-buildings-3d", type: "fill-extrusion", source: "entity-buildings",
-        paint: {
-          "fill-extrusion-color": ["get", "color"],
-          "fill-extrusion-height": ["case", ["==", ["get", "selected"], 1], 34, 22],
-          "fill-extrusion-base": 0,
-          "fill-extrusion-opacity": 0.85,
-        },
-      });
-    }
+    // The tall synthetic building extrusion that used to live here is gone —
+    // it created a second, competing tall vertical shape right next to the new
+    // light beam, and the two visually merged into one ugly brown column instead
+    // of reading as a glowing beam. The ground halo + the beam are the actual
+    // "this is important" signal now, not an extruded box.
   } catch { /* non-critical visual layer — if this fails, markers still work fine on their own */ }
 }
 
@@ -1903,6 +1891,9 @@ const CATEGORY_MARKER_STYLE = {
   venue: { shape: "circle", glow: "#E0955B", emoji: "☕" },
   milestone: { shape: "star", glow: "#F0567A", emoji: "🎉" },
   collectible: { shape: "hex", glow: "#5BD9B0", emoji: "✨" },
+  person: { shape: "circle", glow: "#5BD9E8", emoji: "🧑" },
+  opportunity: { shape: "star", glow: "#D9A441", emoji: "🎯" },
+  place: { shape: "diamond", glow: "#D9A441", emoji: "📍" }, // generic default — nothing falls through beam-less anymore
 };
 function CustomCategoryMarker({ category, onClick, label, selected = false }) {
   const style = CATEGORY_MARKER_STYLE[category] || CATEGORY_MARKER_STYLE.gallery;
@@ -1947,7 +1938,10 @@ function getMarkerCategory(e) {
   if (e.kind === "milestone") return "milestone";
   if (e.isCollectible) return "collectible";
   if (typeof e.category === "string" && e.category.toLowerCase() === "venue") return "venue";
-  return null; // no custom category marker for this entity — falls back to the existing EntityPin
+  if (e.kind === "person") return "person";
+  if (e.kind === "opportunity") return "opportunity";
+  if (e.kind === "idea") return null; // ideas open a separate screen (onShowIdeas), never rendered as a beam marker
+  return "place"; // generic default — every real place/entity gets the beam now, nothing falls through unstyled
 }
 
 /**
@@ -1960,12 +1954,18 @@ function getMarkerCategory(e) {
  */
 function PlayerAvatar({ heading, avatarModel = "character-male-a" }) {
   return (
-    <div style={{ position: "relative", width: 56, height: 64, display: "flex", flexDirection: "column",
+    <div style={{ position: "relative", width: 64, height: 72, display: "flex", flexDirection: "column",
       alignItems: "center", transform: heading != null ? `rotate(${heading}deg)` : "none", transformOrigin: "50% 50%" }}>
-      <div style={{ width: 56, height: 56, borderRadius: "50%", overflow: "hidden", background: "#1a1420cc",
+      <div style={{ width: 64, height: 64, borderRadius: "50%", overflow: "hidden", background: "#1a1420cc",
         border: "3px solid #5BD9E8", boxShadow: "0 0 12px 3px #5BD9E888" }}>
         {/* eslint-disable-next-line react/no-unknown-property */}
-        <model-viewer src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 75deg 2.2m" disable-zoom
+        {/* Was 75deg polar angle — that's looking down at roughly the TOP of the
+            character's head/shoulders (foreshortened), not a recognizable front
+            view, which likely explains why it read as an unclear blob at small
+            size. 82deg is much closer to eye-level, and the extra distance (2.6m)
+            gives the whole figure room to fit inside the circular crop. This is a
+            reasoned adjustment, not a verified fix — I can't render the model myself. */}
+        <model-viewer src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 82deg 2.6m" disable-zoom
           interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
       </div>
       {heading != null && (
@@ -1976,7 +1976,7 @@ function PlayerAvatar({ heading, avatarModel = "character-male-a" }) {
   );
 }
 
-function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, avatarModel, onCollectDrop, worldBuilderActive }) {
+function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, jumpTrigger }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]); // { marker, root } — so React roots get cleanly unmounted, not leaked
@@ -2197,6 +2197,19 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       }
     }
   }, [playerPosition, mapReady, interior, avatarModel, worldBuilderActive]);
+
+  // A deliberate "jump to address" always moves the camera, even during World
+  // Builder free-roam — the free-roam guard above is specifically meant to stop
+  // routine GPS updates from yanking the camera around while you're deliberately
+  // exploring elsewhere, but an explicit jump is the opposite: you asked for the
+  // camera to go there. jumpTrigger (a counter, not the position itself) is what
+  // distinguishes "this changed because you jumped" from every other reason
+  // playerPosition might update.
+  useEffect(() => {
+    if (!jumpTrigger || !mapRef.current || !playerPosition) return;
+    mapRef.current.flyTo({ center: [playerPosition.lng, playerPosition.lat], duration: 1200 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpTrigger]);
 
   function flyTo(lng, lat, targetZoom, pitch) {
     if (!mapRef.current) return;
