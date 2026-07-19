@@ -1849,11 +1849,34 @@ function createBuildingModelsLayer() {
       this.renderer.autoClear = false;
     },
     render(gl, matrix) {
-      this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
+      // The scene lives in METERS near a local origin; this composes the
+      // meters→Mercator transform into the camera matrix in 64-bit on the CPU.
+      // Scaling the objects themselves down to Mercator units (~1e-8/meter,
+      // the previous approach) pushed vertex math below float32 precision on
+      // the GPU — which is exactly what shredded the skinned robot into shards
+      // and made the building jitter during camera movement.
+      const m = new THREE.Matrix4().fromArray(matrix);
+      if (this.refMerc) {
+        m.multiply(new THREE.Matrix4()
+          .makeTranslation(this.refMerc.x, this.refMerc.y, this.refMerc.z)
+          .scale(new THREE.Vector3(this.refK, this.refK, this.refK)));
+      }
+      this.camera.projectionMatrix = m;
       if (this.playerMixer) this.playerMixer.update(this.clock.getDelta());
       this.renderer.resetState();
       this.renderer.render(this.scene, this.camera);
       this.map.triggerRepaint();
+    },
+    // Converts a lat/lng into meter offsets from the layer's local origin
+    // (established by the first thing placed). Everything in the scene is
+    // positioned in real meters relative to this point.
+    toLocalMeters(lng, lat) {
+      if (!this.refMerc) {
+        this.refMerc = maplibregl.MercatorCoordinate.fromLngLat([lng, lat], 0);
+        this.refK = this.refMerc.meterInMercatorCoordinateUnits();
+      }
+      const merc = maplibregl.MercatorCoordinate.fromLngLat([lng, lat], 0);
+      return { x: (merc.x - this.refMerc.x) / this.refK, y: (merc.y - this.refMerc.y) / this.refK };
     },
     // Not part of MapLibre's custom-layer interface — called manually (from
     // WorldEngine_) whenever the entity list changes, to add/remove/reposition
@@ -1869,31 +1892,19 @@ function createBuildingModelsLayer() {
           if (placed.has(e.id)) return; // already positioned — entities don't move
 
           const placeAt = (templateScene) => {
-            // Real ground position and real-world scale — maplibregl.MercatorCoordinate
-            // converts an actual lat/lng into the map's internal projection space, and
-            // meterInMercatorCoordinateUnits() gives the correct scale factor at that
-            // specific latitude (Mercator projection distorts scale, so this isn't a
-            // constant — it has to be computed per-location).
-            const merc = maplibregl.MercatorCoordinate.fromLngLat([e.lng, e.lat], 0);
-            const metersScale = merc.meterInMercatorCoordinateUnits();
-            // The model's actual native geometry measures roughly 0.9 x 1.3 x 0.9
-            // units (checked directly against the real GLB data) — far too small
-            // to represent real meters as-is. This multiplier brings it up to
-            // roughly a real 10m-tall small commercial building; it's a reasoned
-            // estimate from the measured bounds, not a precise architectural value.
+            // Meter-space placement relative to the layer's local origin — no
+            // more per-object Mercator scaling (see the render() comment on
+            // float precision). The model's actual native geometry measures
+            // roughly 0.9 x 1.3 x 0.9 units, so this multiplier brings it up
+            // to roughly a real 10m-tall small commercial building.
             const REAL_WORLD_SIZE_CORRECTION = 8;
-            const scale = metersScale * REAL_WORLD_SIZE_CORRECTION;
-            console.log(`[building-models-3d] placing ${e.name || e.id} at`, { merc, scale });
+            const local = this.toLocalMeters(e.lng, e.lat);
             const model = templateScene.clone();
-            model.position.set(merc.x, merc.y, merc.z);
-            // Y-up glTF into Mercator space via a PURE rotation with all-positive
-            // scale. The earlier mirrored-scale approach (s,-s,s) flipped every
-            // triangle's winding and normals — geometry landed in the right place
-            // but lit/shaded inside-out, which is exactly the jagged, shredded
-            // look on device. rotX(+90°) with positive scale maps local up to
-            // world up with height positive and nothing mirrored.
+            model.position.set(local.x, local.y, 0);
+            // Pure rotation, positive scale: local Y-up → scene Z-up with
+            // nothing mirrored (mirrored scale flips winding/normals).
             model.rotation.x = Math.PI / 2;
-            model.scale.set(scale, scale, scale);
+            model.scale.set(REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION);
             this.scene.add(model);
             placed.set(e.id, model);
           };
@@ -1955,9 +1966,9 @@ function createBuildingModelsLayer() {
         });
         return;
       }
-      const merc = maplibregl.MercatorCoordinate.fromLngLat([pos.lng, pos.lat], 0);
-      const s = merc.meterInMercatorCoordinateUnits() * (ROBOT_HEIGHT_METERS / NATIVE_HEIGHT);
-      this.playerGroup.position.set(merc.x, merc.y, merc.z);
+      const local = this.toLocalMeters(pos.lng, pos.lat);
+      const s = ROBOT_HEIGHT_METERS / NATIVE_HEIGHT; // plain meters — no Mercator scaling here
+      this.playerGroup.position.set(local.x, local.y, 0);
       this.playerGroup.scale.set(s, s, s);
       // Compass heading → model yaw. Under the pure rotX(+90°) correction the
       // model's forward (+Z) faces map-north at zero yaw, and compass heading
