@@ -178,6 +178,7 @@ function nextSpot() { const s = SPARE_SPOTS[spotCursor % SPARE_SPOTS.length]; sp
 // served from public/avatars/. GLB format, ~250KB each, renders via <model-viewer>
 // (loaded in index.html) — no hand-written Three.js scene setup needed.
 const AVATAR_OPTIONS = [
+  { key: "robot", label: "Robot" },
   { key: "character-female-a", label: "Female A" }, { key: "character-female-b", label: "Female B" },
   { key: "character-female-c", label: "Female C" }, { key: "character-female-d", label: "Female D" },
   { key: "character-female-e", label: "Female E" }, { key: "character-female-f", label: "Female F" },
@@ -185,6 +186,11 @@ const AVATAR_OPTIONS = [
   { key: "character-male-c", label: "Male C" }, { key: "character-male-d", label: "Male D" },
   { key: "character-male-e", label: "Male E" }, { key: "character-male-f", label: "Male F" },
 ];
+
+// Avatars whose GLB carries a real skeletal animation clip (e.g. the robot's
+// Mixamo walk cycle). These play their real walk while moving instead of the
+// CSS bob; the bob remains the movement feedback for the static Kenney models.
+const ANIMATED_AVATARS = new Set(["robot"]);
 
 const PLACE_CATEGORIES = [
   { key: "studio", label: "Studio", icon: Palette, color: T.wood },
@@ -1702,12 +1708,12 @@ function applyArtDistrictTheme(map, night) {
       else if (layer.type === "fill" && /(landuse|park|grass|wood|forest|golf|pitch)/i.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", p.land);
       else if (layer.type === "fill-extrusion") {
         map.setPaintProperty(layer.id, "fill-extrusion-color", p.building);
-        // "Background buildings extruded inches from the ground" — 0.15m (≈6
-        // inches), not 6 meters. Nearly flat, just enough presence to read as a
-        // real building footprint rather than a painted-on shape, while the
-        // important-location beam/halo does all the actual visual work of
-        // drawing the eye.
-        map.setPaintProperty(layer.id, "fill-extrusion-height", 0.15);
+        // Background buildings at a genuine low-rise 6m — enough to cast real
+        // 3D form at the 72° gameplay pitch instead of reading as painted-on
+        // plates. Interactive entity buildings (22m/34m) still tower over
+        // these, so the hierarchy is preserved; the beam/halo remains the
+        // primary eye-draw.
+        map.setPaintProperty(layer.id, "fill-extrusion-height", 6);
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
       else if (layer.type === "line" && layer["source-layer"] === "transportation") {
@@ -1751,10 +1757,9 @@ function addBuildingExtrusion(map, night) {
       id: "art-district-buildings-3d", type: "fill-extrusion", source: vectorSourceId, "source-layer": "building",
       paint: {
         "fill-extrusion-color": night ? ART_DISTRICT_PALETTE.night.building : ART_DISTRICT_PALETTE.day.building,
-        // Same "inches, not meters" rule as the theme function applies to a
-        // pre-existing building layer — a fallback shouldn't look more dramatic
-        // than the real thing would have.
-        "fill-extrusion-height": 0.15,
+        // Same 6m low-rise rule as the theme function applies to a
+        // pre-existing building layer — fallback matches the real thing.
+        "fill-extrusion-height": 6,
         "fill-extrusion-base": 0,
         "fill-extrusion-opacity": BUILDING_OPACITY_BASELINE,
       },
@@ -2065,32 +2070,54 @@ function getMarkerCategory(e) {
  * trade-off for something rendered at marker scale, not a full 3D character screen.
  */
 function PlayerAvatar({ heading, avatarModel = "character-male-a", isMoving = false }) {
+  // The character stays upright at all times. Rotating the whole marker by
+  // compass heading (the previous approach) tipped the character onto its side
+  // or head whenever you faced east/west/south — heading is now applied only
+  // to the direction arrow, which orbits the circle to point where you face.
+  const hasRealAnimation = ANIMATED_AVATARS.has(avatarModel);
+  const mvRef = useRef(null);
+  // Real skeletal animation control: play the baked-in walk cycle while GPS
+  // says we're moving; pause and rewind to the standing pose when idle. The
+  // static Kenney models have no clips, so play()/pause() would be no-ops —
+  // they keep the CSS bob as their movement feedback instead.
+  useEffect(() => {
+    const mv = mvRef.current;
+    if (!mv || !hasRealAnimation) return;
+    const apply = () => {
+      if (isMoving) { mv.play && mv.play(); }
+      else { mv.pause && mv.pause(); try { mv.currentTime = 0; } catch { /* not loaded yet */ } }
+    };
+    if (mv.loaded) apply();
+    else mv.addEventListener("load", apply, { once: true });
+    return () => mv.removeEventListener("load", apply);
+  }, [isMoving, hasRealAnimation]);
   return (
     <div style={{ position: "relative", width: 64, height: 72, display: "flex", flexDirection: "column",
-      alignItems: "center", transform: heading != null ? `rotate(${heading}deg)` : "none", transformOrigin: "50% 50%" }}>
+      alignItems: "center" }}>
       <style>{MARKER_ANIMATIONS}</style>
-      {/* Not a true walk-cycle — the animated character packs are FBX-only (no
-          GLB), and the walk/run clips live in separate files meant to be merged
-          onto the skeleton in a 3D tool I don't have here (no Blender, no
-          FBX-to-GLB converter in this sandbox). This is real motion feedback
-          using the model that's actually working: a genuine bob while you're
-          detected as moving (real GPS distance since the last fix), a subtler
-          idle sway otherwise — not the same thing as a skeletal walk animation,
-          but honest about what it is. */}
       <div style={{ width: 64, height: 64, borderRadius: "50%", overflow: "hidden", background: "#1a1420cc",
         border: "3px solid #5BD9E8", boxShadow: "0 0 12px 3px #5BD9E888",
-        animation: isMoving ? "avatarWalkBob 0.5s ease-in-out infinite" : "avatarIdleSway 2.4s ease-in-out infinite" }}>
+        animation: hasRealAnimation
+          ? "none" // the model itself walks — layering a CSS bob on top would double the motion
+          : isMoving ? "avatarWalkBob 0.5s ease-in-out infinite" : "avatarIdleSway 2.4s ease-in-out infinite" }}>
         {/* eslint-disable-next-line react/no-unknown-property */}
-        {/* orientation corrects an up-axis mismatch that was rendering the
-            model upside down — common with FBX-derived GLB exports where the
-            source tool's up-axis convention doesn't match what model-viewer
-            expects by default. */}
-        <model-viewer src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 82deg 2.6m" orientation="180deg 0deg 0deg" disable-zoom
+        {/* No orientation override: the earlier roll-180 "upside-down fix" was
+            actually compensating for the marker-wide heading rotation (a heading
+            near 180° flipped the whole circle). With the character now locked
+            upright, the model renders in its natural pose. */}
+        <model-viewer ref={mvRef} src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 82deg 2.6m" disable-zoom
+          autoplay={hasRealAnimation ? "" : undefined}
           interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
       </div>
       {heading != null && (
-        <div style={{ width: 0, height: 0, marginTop: -3, borderLeft: "6px solid transparent",
-          borderRight: "6px solid transparent", borderBottom: "10px solid #5BD9E8", filter: "drop-shadow(0 0 3px #5BD9E8)" }} />
+        // Heading arrow orbits the circle's edge, pointing the direction of
+        // travel — the only element that rotates with the compass.
+        <div style={{ position: "absolute", top: 0, left: 0, width: 64, height: 64, pointerEvents: "none",
+          transform: `rotate(${heading}deg)`, transformOrigin: "50% 50%" }}>
+          <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)",
+            width: 0, height: 0, borderLeft: "6px solid transparent", borderRight: "6px solid transparent",
+            borderBottom: "10px solid #5BD9E8", filter: "drop-shadow(0 0 3px #5BD9E8)" }} />
+        </div>
       )}
     </div>
   );
