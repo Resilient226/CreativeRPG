@@ -1775,6 +1775,34 @@ function squareAround(lat, lng, radiusMeters) {
 }
 
 /**
+ * Hides the basemap's own OSM building extrusions wherever an important
+ * location has a real GLB building model — so the model REPLACES the generic
+ * slab instead of standing on top of it. Works by filtering every
+ * fill-extrusion layer with a "not within these cutout squares" expression;
+ * each layer's original filter is preserved and AND-ed back in, so the style's
+ * own filtering keeps working.
+ */
+const _originalBuildingFilters = new Map();
+function applyBuildingCutouts(map, districts) {
+  const cutouts = [];
+  districts.forEach(d => d.entities.forEach(e => {
+    const style = CATEGORY_MARKER_STYLE[getMarkerCategory(e)];
+    if (style && style.buildingModel) cutouts.push(squareAround(e.lat, e.lng, 45));
+  }));
+  let layers = [];
+  try { layers = (map.getStyle().layers || []).filter(l => l.type === "fill-extrusion"); } catch { return; }
+  layers.forEach(l => {
+    try {
+      if (!_originalBuildingFilters.has(l.id)) _originalBuildingFilters.set(l.id, map.getFilter(l.id) || null);
+      const orig = _originalBuildingFilters.get(l.id);
+      if (!cutouts.length) { map.setFilter(l.id, orig); return; }
+      const hide = ["!", ["within", { type: "MultiPolygon", coordinates: cutouts }]];
+      map.setFilter(l.id, orig ? ["all", orig, hide] : hide);
+    } catch { /* a style layer that rejects the filter just keeps its buildings — non-critical */ }
+  });
+}
+
+/**
  * The actual mechanism behind "interactive buildings are fully 3D, background
  * buildings are flat": generic OSM building polygons don't know about game
  * entities, so precisely re-coloring/re-extruding only the "right" real building
@@ -1830,7 +1858,15 @@ function updateEntityHighlights(map, districts, selectedId) {
 function createBuildingModelsLayer() {
   const gltfCache = {}; // buildingModel key -> loaded THREE.Group template, cloned per placed instance
   const placed = new Map(); // entity.id -> the THREE.Object3D currently in the scene
-  const loader = new GLTFLoader();
+  // The building GLBs reference their texture by the relative path
+  // "Textures/colormap.png", which resolves to /buildings/Textures/colormap.png —
+  // a file that doesn't exist. The actual colormap lives at
+  // /buildings/BUILDINGS-colormap.png. The texture silently failed to load and
+  // every material fell back to blank white — that's the "no color" bug. This
+  // URL modifier redirects the broken path to the real file.
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier(url => /colormap\.png$/i.test(url) ? "/buildings/BUILDINGS-colormap.png" : url);
+  const loader = new GLTFLoader(manager);
 
   return {
     id: "building-models-3d",
@@ -2389,7 +2425,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   // (entered) one changes — same "important places draw attention" mechanism,
   // updated live rather than only set once.
   useEffect(() => {
-    if (mapRef.current && mapReady) updateEntityHighlights(mapRef.current, districts, interior?.id);
+    if (mapRef.current && mapReady) { updateEntityHighlights(mapRef.current, districts, interior?.id); applyBuildingCutouts(mapRef.current, districts); }
     if (buildingLayerRef.current) buildingLayerRef.current.updateEntities(districts);
   }, [districts, mapReady, interior]);
 
