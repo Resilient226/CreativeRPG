@@ -1853,10 +1853,20 @@ function applyBuildingCutouts(map, districts) {
  * halo, covering "selected building: subtle glow and highlight."
  */
 function updateEntityHighlights(map, districts, selectedId) {
-  const haloFeatures = districts.flatMap(d => d.entities.map(e => ({
-    type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] },
-    properties: { selected: e.id === selectedId ? 1 : 0, color: T[d.colorKey] || "#D9A441" },
-  })));
+  const haloFeatures = districts.flatMap(d => d.entities.map(e => {
+    const style = CATEGORY_MARKER_STYLE[getMarkerCategory(e)];
+    return {
+      type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] },
+      properties: {
+        selected: e.id === selectedId ? 1 : 0,
+        // Hero locations (the ones with real GLB buildings) get a much larger,
+        // warmer pool of light than regular entities — the "soft glow around
+        // the building" from the polish spec.
+        hero: style && style.buildingModel ? 1 : 0,
+        color: T[d.colorKey] || "#D9A441",
+      },
+    };
+  }));
   const haloGeojson = { type: "FeatureCollection", features: haloFeatures };
   try {
     const existingHalo = map.getSource("entity-highlights");
@@ -1866,10 +1876,18 @@ function updateEntityHighlights(map, districts, selectedId) {
       map.addLayer({
         id: "entity-highlight-halo", type: "circle", source: "entity-highlights",
         paint: {
-          "circle-radius": ["case", ["==", ["get", "selected"], 1], 26, 16],
-          "circle-color": ["get", "color"],
-          "circle-opacity": ["case", ["==", ["get", "selected"], 1], 0.35, 0.18],
+          "circle-radius": ["case",
+            ["==", ["get", "hero"], 1], 48,
+            ["==", ["get", "selected"], 1], 26, 16],
+          "circle-color": ["case", ["==", ["get", "hero"], 1], "#FFB347", ["get", "color"]],
+          "circle-opacity": ["case",
+            ["==", ["get", "hero"], 1], 0.38,
+            ["==", ["get", "selected"], 1], 0.35, 0.18],
           "circle-blur": 1,
+          // Lie flat on the ground like pools of light — at the new 76° camera
+          // pitch, viewport-aligned circles read as floating billboards instead.
+          "circle-pitch-alignment": "map",
+          "circle-pitch-scale": "map",
         },
       });
     }
@@ -1986,6 +2004,18 @@ function createBuildingModelsLayer() {
         if (this.playerAction) this.playerAction.paused = !moving;
       }
       if (this.playerMixer) this.playerMixer.update(dt);
+      // Hero collectibles: slow spin + gentle bob, each phase-shifted so a
+      // street of hero buildings doesn't pulse in eerie unison.
+      this._heroT = (this._heroT || 0) + dt;
+      let gi = 0;
+      for (const obj of placed.values()) {
+        const gem = obj.userData && obj.userData.gem;
+        if (gem) {
+          gem.rotation.z += dt * 1.4;
+          gem.position.z = gem.userData.baseZ + Math.sin(this._heroT * 1.9 + gi * 1.3) * 0.7;
+          gi++;
+        }
+      }
       this.renderer.resetState();
       this.renderer.render(this.scene, this.camera);
       this.map.triggerRepaint();
@@ -2022,6 +2052,11 @@ function createBuildingModelsLayer() {
             // to roughly a real 10m-tall small commercial building.
             const REAL_WORLD_SIZE_CORRECTION = 8;
             const local = this.toLocalMeters(e.lng, e.lat);
+            // Each hero location is a CONTAINER: the building model, a floating
+            // collectible gem above the roof, and a warm accent light washing
+            // the facade — placed and removed as one unit.
+            const container = new THREE.Group();
+            container.position.set(local.x, local.y, 0);
             const model = templateScene.clone();
             // Hero-building treatment: cast real shadows, and clone materials
             // with a faint warm emissive so windows/surfaces read as lit from
@@ -2037,13 +2072,30 @@ function createBuildingModelsLayer() {
                 }
               }
             });
-            model.position.set(local.x, local.y, 0);
             // Pure rotation, positive scale: local Y-up → scene Z-up with
             // nothing mirrored (mirrored scale flips winding/normals).
             model.rotation.x = Math.PI / 2;
             model.scale.set(REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION);
-            this.scene.add(model);
-            placed.set(e.id, model);
+            container.add(model);
+            // Floating collectible above the roof — spins and bobs in the
+            // render loop, the classic "there's something here for you" beacon.
+            const gem = new THREE.Mesh(
+              new THREE.OctahedronGeometry(1.3),
+              new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffb347, emissiveIntensity: 1.4, metalness: 0.3, roughness: 0.25 })
+            );
+            gem.position.set(0, 0, 16);
+            gem.userData.baseZ = 16;
+            container.add(gem);
+            container.userData.gem = gem;
+            // Warm accent light on the facade. Capped so a dense district can't
+            // stack up dozens of live point lights and tank the frame rate.
+            if (placed.size < 8) {
+              const accent = new THREE.PointLight(0xffc07a, 30, 45, 2);
+              accent.position.set(0, 0, 12);
+              container.add(accent);
+            }
+            this.scene.add(container);
+            placed.set(e.id, container);
           };
 
           if (gltfCache[style.buildingModel]) { placeAt(gltfCache[style.buildingModel]); }
