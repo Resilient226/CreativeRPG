@@ -1886,16 +1886,14 @@ function createBuildingModelsLayer() {
             console.log(`[building-models-3d] placing ${e.name || e.id} at`, { merc, scale });
             const model = templateScene.clone();
             model.position.set(merc.x, merc.y, merc.z);
-            // Y-up glTF into Mercator space. Three.js composes Object3D
-            // transforms as position→rotation→scale, so with the mirrored-Y
-            // scale below, the rotation must be -90° here — +90° (the previous
-            // value) composed in this order sends the model's height axis
-            // NEGATIVE, rendering every building mirrored underground. This
-            // -90°/(s,-s,s) pair is matrix-identical to the canonical
-            // translate·scale(s,-s,s)·rotateX(+90°) pattern from the official
-            // custom-layer example.
-            model.rotation.x = -Math.PI / 2;
-            model.scale.set(scale, -scale, scale);
+            // Y-up glTF into Mercator space via a PURE rotation with all-positive
+            // scale. The earlier mirrored-scale approach (s,-s,s) flipped every
+            // triangle's winding and normals — geometry landed in the right place
+            // but lit/shaded inside-out, which is exactly the jagged, shredded
+            // look on device. rotX(+90°) with positive scale maps local up to
+            // world up with height positive and nothing mirrored.
+            model.rotation.x = Math.PI / 2;
+            model.scale.set(scale, scale, scale);
             this.scene.add(model);
             placed.set(e.id, model);
           };
@@ -1931,11 +1929,12 @@ function createBuildingModelsLayer() {
         this.playerLoading = true;
         this.pendingPlayerPos = pos;
         loader.load(`/avatars/robot.glb`, gltf => {
-          // Outer group carries the Y-up→Mercator axis correction (same
-          // -90°/(s,-s,s) pair as the building models); the inner child is
-          // free to rotate around its own upright axis for compass heading.
+          // Outer group carries the Y-up→Mercator axis correction — a PURE
+          // rotation with positive scale (see the building-placement comment:
+          // mirrored scale shreds lighting on skinned meshes); the inner child
+          // rotates around its own upright axis for compass heading.
           const group = new THREE.Group();
-          group.rotation.x = -Math.PI / 2;
+          group.rotation.x = Math.PI / 2;
           const child = gltf.scene;
           group.add(child);
           this.scene.add(group);
@@ -1959,11 +1958,12 @@ function createBuildingModelsLayer() {
       const merc = maplibregl.MercatorCoordinate.fromLngLat([pos.lng, pos.lat], 0);
       const s = merc.meterInMercatorCoordinateUnits() * (ROBOT_HEIGHT_METERS / NATIVE_HEIGHT);
       this.playerGroup.position.set(merc.x, merc.y, merc.z);
-      this.playerGroup.scale.set(s, -s, s);
-      // Compass heading → model yaw. 180° offset because the model's forward
-      // (+Z) lands facing map-south under the axis correction; heading sign
-      // may need one flip after a real on-device look — it's a single constant.
-      this.playerChild.rotation.y = THREE.MathUtils.degToRad(180 - (pos.heading ?? 0));
+      this.playerGroup.scale.set(s, s, s);
+      // Compass heading → model yaw. Under the pure rotX(+90°) correction the
+      // model's forward (+Z) faces map-north at zero yaw, and compass heading
+      // is clockwise while three.js yaw is counterclockwise — hence the plain
+      // negation. If the robot faces the wrong way on device, flip this sign.
+      this.playerChild.rotation.y = -THREE.MathUtils.degToRad(pos.heading ?? 0);
       if (this.playerAction) this.playerAction.paused = !pos.isMoving;
     },
   };
