@@ -10,7 +10,7 @@ import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCateg
 import { applyInteraction, groupPeopleBy, clampStat, normalizeTrainingNpc } from "./engines/relationshipEngine";
 import { loadNpc } from "./training/data";
 import { ZOOM_MIN, ZOOM_MAX, LOD_DISTRICT, LOD_INTERIOR, DEFAULT_ZOOM, clampZoom, computeTier, buildDistricts, DISTRICT_LAYOUT } from "./engines/mapEngine";
-import { DEFAULT_HOME_BASE, geocodeAddress, computeHeadingFromPositions, jitterNearBase } from "./engines/geoEngine";
+import { DEFAULT_HOME_BASE, geocodeAddress, computeHeadingFromPositions, jitterNearBase, haversineDistanceKm } from "./engines/geoEngine";
 import { buildUpcomingDeadlines, isUrgentDeadline, consolidateByTitle, filterDeadlines } from "./engines/calendarEngine";
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
@@ -512,7 +512,13 @@ export default function CreativeEmpireOS() {
           const heading = pos.coords.heading != null && Number.isFinite(pos.coords.heading)
             ? pos.coords.heading
             : (prev ? computeHeadingFromPositions(prev, p) ?? prev.heading : null);
-          return { ...p, heading };
+          // Real movement detection — not a true walk-cycle (the animated
+          // character packs are FBX-only, no GLB, so a real skeletal walk
+          // animation isn't achievable here), but genuine motion feedback: moved
+          // more than ~2m since the last fix counts as "walking" for the avatar's
+          // bob animation.
+          const isMoving = prev ? haversineDistanceKm(prev.lat, prev.lng, p.lat, p.lng) * 1000 > 2 : false;
+          return { ...p, heading, isMoving };
         });
       },
       () => { /* denied or unavailable — DEFAULT_HOME_BASE (Atlanta) already covers homeBase; avatar just won't show */ },
@@ -1694,12 +1700,12 @@ function applyArtDistrictTheme(map, night) {
       else if (layer.type === "fill" && /(landuse|park|grass|wood|forest|golf|pitch)/i.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", p.land);
       else if (layer.type === "fill-extrusion") {
         map.setPaintProperty(layer.id, "fill-extrusion-color", p.building);
-        // "Background buildings are flat, low-profile" — capping height low
-        // (rather than using real OSM height data, which varies wildly) is what
-        // actually makes the backdrop read as background, not a lighting trick.
-        // Interactive locations get their own separate, genuinely tall extrusion
-        // (see updateEntityHighlights) so they visibly pop above this.
-        map.setPaintProperty(layer.id, "fill-extrusion-height", 6);
+        // "Background buildings extruded inches from the ground" — 0.15m (≈6
+        // inches), not 6 meters. Nearly flat, just enough presence to read as a
+        // real building footprint rather than a painted-on shape, while the
+        // important-location beam/halo does all the actual visual work of
+        // drawing the eye.
+        map.setPaintProperty(layer.id, "fill-extrusion-height", 0.15);
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
       else if (layer.type === "line" && layer["source-layer"] === "transportation") {
@@ -1743,10 +1749,10 @@ function addBuildingExtrusion(map, night) {
       id: "art-district-buildings-3d", type: "fill-extrusion", source: vectorSourceId, "source-layer": "building",
       paint: {
         "fill-extrusion-color": night ? ART_DISTRICT_PALETTE.night.building : ART_DISTRICT_PALETTE.day.building,
-        // Same "flat, low-profile" rule as the theme function applies to a
+        // Same "inches, not meters" rule as the theme function applies to a
         // pre-existing building layer — a fallback shouldn't look more dramatic
         // than the real thing would have.
-        "fill-extrusion-height": 6,
+        "fill-extrusion-height": 0.15,
         "fill-extrusion-base": 0,
         "fill-extrusion-opacity": BUILDING_OPACITY_BASELINE,
       },
@@ -1883,17 +1889,19 @@ const MARKER_ANIMATIONS = `
   @keyframes markerBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
   @keyframes markerShimmer { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.4); } }
   @keyframes beamFlicker { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
+  @keyframes avatarWalkBob { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.03); } }
+  @keyframes avatarIdleSway { 0%,100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
 `;
 const CATEGORY_MARKER_STYLE = {
-  gallery: { shape: "diamond", glow: "#D9A441", emoji: "🖼️" },
-  museum: { shape: "column", glow: "#5B8FD9", emoji: "🏛️" },
-  public_art: { shape: "blob", glow: "#C25BD9", emoji: "🎨" },
-  venue: { shape: "circle", glow: "#E0955B", emoji: "☕" },
+  gallery: { shape: "diamond", glow: "#D9A441", emoji: "🖼️", buildingModel: "building-a" },
+  museum: { shape: "column", glow: "#5B8FD9", emoji: "🏛️", buildingModel: "building-b" },
+  public_art: { shape: "blob", glow: "#C25BD9", emoji: "🎨", buildingModel: "building-c" },
+  venue: { shape: "circle", glow: "#E0955B", emoji: "☕", buildingModel: "building-d" },
   milestone: { shape: "star", glow: "#F0567A", emoji: "🎉" },
   collectible: { shape: "hex", glow: "#5BD9B0", emoji: "✨" },
   person: { shape: "circle", glow: "#5BD9E8", emoji: "🧑" },
   opportunity: { shape: "star", glow: "#D9A441", emoji: "🎯" },
-  place: { shape: "diamond", glow: "#D9A441", emoji: "📍" }, // generic default — nothing falls through beam-less anymore
+  place: { shape: "diamond", glow: "#D9A441", emoji: "📍", buildingModel: "building-e" }, // generic default — nothing falls through beam-less anymore
 };
 function CustomCategoryMarker({ category, onClick, label, selected = false }) {
   const style = CATEGORY_MARKER_STYLE[category] || CATEGORY_MARKER_STYLE.gallery;
@@ -1909,7 +1917,7 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
     : category === "milestone" ? "markerGlowPulse 1.6s ease-in-out infinite"
     : category === "collectible" ? "markerBob 2s ease-in-out infinite, markerShimmer 1.8s ease-in-out infinite"
     : "markerGlowPulse 3s ease-in-out infinite";
-  const size = selected ? 42 : 34;
+  const size = selected ? 56 : 44;
   const beamHeight = selected ? 70 : 52;
   return (
     // MapLibre anchors a marker at the BOTTOM-CENTER of this element by default —
@@ -1918,11 +1926,24 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
     // instead of the icon itself marking the ground position.
     <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
       <style>{MARKER_ANIMATIONS}</style>
-      <div style={{ "--glow": style.glow, width: size, height: size, background: "#1a1420ee",
-        border: `${selected ? 3 : 2}px solid ${selected ? "#fff" : style.glow}`,
-        display: "flex", alignItems: "center", justifyContent: "center", fontSize: selected ? 18 : 15, animation, ...shapeStyle }}>
-        <span style={{ transform: style.shape === "diamond" || style.shape === "star" ? "rotate(-45deg)" : "none" }}>{style.emoji}</span>
-      </div>
+      {style.buildingModel ? (
+        // A real 3D building model (Kenney's CC0 City Kit Commercial pack) for
+        // genuine place categories — no camera-controls, same reasoning as the
+        // avatar: this should never capture touch/drag gestures away from the map.
+        <div style={{ "--glow": style.glow, width: size + 14, height: size + 14, borderRadius: 10,
+          background: "#1a1420ee", border: `${selected ? 3 : 2}px solid ${selected ? "#fff" : style.glow}`,
+          animation, overflow: "hidden" }}>
+          {/* eslint-disable-next-line react/no-unknown-property */}
+          <model-viewer src={`/buildings/${style.buildingModel}.glb`} camera-orbit="35deg 75deg 105%" disable-zoom
+            interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
+        </div>
+      ) : (
+        <div style={{ "--glow": style.glow, width: size, height: size, background: "#1a1420ee",
+          border: `${selected ? 3 : 2}px solid ${selected ? "#fff" : style.glow}`,
+          display: "flex", alignItems: "center", justifyContent: "center", fontSize: selected ? 18 : 15, animation, ...shapeStyle }}>
+          <span style={{ transform: style.shape === "diamond" || style.shape === "star" ? "rotate(-45deg)" : "none" }}>{style.emoji}</span>
+        </div>
+      )}
       {label && <div style={{ background: "#000000b0", borderRadius: 5, padding: "1px 6px", fontFamily: head, fontSize: 8, color: "#fff", maxWidth: 76, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>}
       <div style={{ width: 3, height: beamHeight, marginTop: 2,
         background: `linear-gradient(180deg, ${style.glow}00, ${style.glow}dd 70%, ${style.glow}ff)`,
@@ -1952,19 +1973,23 @@ function getMarkerCategory(e) {
  * approximation (not true 3D yaw inside the model-viewer scene), the right
  * trade-off for something rendered at marker scale, not a full 3D character screen.
  */
-function PlayerAvatar({ heading, avatarModel = "character-male-a" }) {
+function PlayerAvatar({ heading, avatarModel = "character-male-a", isMoving = false }) {
   return (
     <div style={{ position: "relative", width: 64, height: 72, display: "flex", flexDirection: "column",
       alignItems: "center", transform: heading != null ? `rotate(${heading}deg)` : "none", transformOrigin: "50% 50%" }}>
+      <style>{MARKER_ANIMATIONS}</style>
+      {/* Not a true walk-cycle — the animated character packs are FBX-only (no
+          GLB), and the walk/run clips live in separate files meant to be merged
+          onto the skeleton in a 3D tool I don't have here (no Blender, no
+          FBX-to-GLB converter in this sandbox). This is real motion feedback
+          using the model that's actually working: a genuine bob while you're
+          detected as moving (real GPS distance since the last fix), a subtler
+          idle sway otherwise — not the same thing as a skeletal walk animation,
+          but honest about what it is. */}
       <div style={{ width: 64, height: 64, borderRadius: "50%", overflow: "hidden", background: "#1a1420cc",
-        border: "3px solid #5BD9E8", boxShadow: "0 0 12px 3px #5BD9E888" }}>
+        border: "3px solid #5BD9E8", boxShadow: "0 0 12px 3px #5BD9E888",
+        animation: isMoving ? "avatarWalkBob 0.5s ease-in-out infinite" : "avatarIdleSway 2.4s ease-in-out infinite" }}>
         {/* eslint-disable-next-line react/no-unknown-property */}
-        {/* Was 75deg polar angle — that's looking down at roughly the TOP of the
-            character's head/shoulders (foreshortened), not a recognizable front
-            view, which likely explains why it read as an unclear blob at small
-            size. 82deg is much closer to eye-level, and the extra distance (2.6m)
-            gives the whole figure room to fit inside the circular crop. This is a
-            reasoned adjustment, not a verified fix — I can't render the model myself. */}
         <model-viewer src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 82deg 2.6m" disable-zoom
           interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
       </div>
@@ -2080,18 +2105,43 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     // nothing without this. Only engages for exactly one touch — a second touch
     // starting mid-gesture hands off to the native pinch-zoom handler instead.
     let rotateStartX = null, rotateStartBearing = null;
+    // Edge-pitch gesture: both fingers near the LEFT/RIGHT screen edges, sliding
+    // vertically together, adjusts pitch — distinct from a normal central pinch,
+    // which still just zooms. Down = lower pitch (bird's eye), up = higher pitch
+    // (toward the horizon). touchZoomRotate gets disabled for the duration of this
+    // specific gesture so pinch-zoom doesn't also fire from the same two touches.
+    const EDGE_ZONE = 70;
+    let edgePitchActive = false, edgePitchStartY = null, edgePitchStartPitch = null;
+    function isNearEdge(x) { return x < EDGE_ZONE || x > window.innerWidth - EDGE_ZONE; }
     const el = map.getContainer();
     function onTouchStart(e) {
+      if (e.touches.length === 2 && isNearEdge(e.touches[0].clientX) && isNearEdge(e.touches[1].clientX)) {
+        edgePitchActive = true;
+        edgePitchStartY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        edgePitchStartPitch = map.getPitch();
+        map.touchZoomRotate.disable();
+        rotateStartX = null;
+        return;
+      }
       if (e.touches.length !== 1 || isAnimatingRef.current) { rotateStartX = null; return; }
       rotateStartX = e.touches[0].clientX;
       rotateStartBearing = map.getBearing();
     }
     function onTouchMove(e) {
+      if (edgePitchActive && e.touches.length === 2) {
+        const avgY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const newPitch = Math.max(20, Math.min(82, edgePitchStartPitch - (avgY - edgePitchStartY) * 0.25));
+        map.setPitch(newPitch);
+        return;
+      }
       if (rotateStartX == null || e.touches.length !== 1 || isAnimatingRef.current) return;
       const dx = e.touches[0].clientX - rotateStartX;
       map.setBearing(rotateStartBearing + dx * 0.3);
     }
-    function onTouchEnd(e) { if (e.touches.length !== 1) rotateStartX = null; }
+    function onTouchEnd(e) {
+      if (e.touches.length < 2 && edgePitchActive) { edgePitchActive = false; map.touchZoomRotate.enable(); map.touchZoomRotate.disableRotation(); }
+      if (e.touches.length !== 1) rotateStartX = null;
+    }
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: true });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -2167,7 +2217,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     } else {
       avatarRef.current.marker.setLngLat([playerPosition.lng, playerPosition.lat]);
     }
-    avatarRef.current.root.render(<PlayerAvatar heading={playerPosition.heading} avatarModel={avatarModel} />);
+    avatarRef.current.root.render(<PlayerAvatar heading={playerPosition.heading} avatarModel={avatarModel} isMoving={playerPosition.isMoving} />);
     if (!interior) {
       if (!hasArrivedRef.current) {
         // The arrival sequence: camera flies smoothly from the wide establishing
