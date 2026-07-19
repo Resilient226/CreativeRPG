@@ -1652,11 +1652,13 @@ function isNightNow() {
 }
 
 const ART_DISTRICT_PALETTE = {
-  // Direction shifted from realistic asphalt gray toward a brighter, more
-  // game-like look (Pokémon GO as the reference) — warm cream/tan roads, plain
-  // sky blue background, per direct request rather than the earlier moody dark theme.
-  night: { bg: "#1B3A5C", building: "#c9a878", road: "#D9C9A3", roadMinor: "#B8A67D", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
-  day: { bg: "#6EB5E8", building: "#e0c29c", road: "#F0DFC0", roadMinor: "#D9C9A3", water: "#1a4f4d", land: "#96b08e", label: "#3a2a1a", halo: "#fff8ea" },
+  // Roads moved from warm tan to dark asphalt per the visual polish sprint —
+  // "roads should feel like places to walk, not lines on a map." The warm gold
+  // identity survives in the sidewalk bands and lane markings instead of the
+  // road surface itself, so streets read as real streets while the world keeps
+  // its premium gold-on-navy character.
+  night: { bg: "#1B3A5C", building: "#c9a878", road: "#2F333B", roadMinor: "#3A3E47", sidewalk: "#8A8065", laneMarking: "#E8D9A8", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
+  day: { bg: "#6EB5E8", building: "#e0c29c", road: "#3D424C", roadMinor: "#484D58", sidewalk: "#A69B7C", laneMarking: "#F5E7B8", water: "#1a4f4d", land: "#96b08e", label: "#3a2a1a", halo: "#fff8ea" },
 };
 // Non-interactive buildings sit back at partial opacity so real entity locations
 // naturally draw the eye — this is the actual mechanism behind "important places
@@ -1677,17 +1679,17 @@ const BUILDING_OPACITY_BASELINE = 0.5;
 // get 4x wider every single time that happens, compounding indefinitely instead
 // of staying at a stable 4x.
 const originalRoadWidths = {};
-function widenRoadLayer(map, layerId, roadClasses) {
+function widenRoadLayer(map, layerId, roadClasses, multiplier = 6) {
   try {
     if (!(layerId in originalRoadWidths)) {
       originalRoadWidths[layerId] = map.getPaintProperty(layerId, "line-width") ?? 1;
     }
     const original = originalRoadWidths[layerId];
-    // 6x, not 4x — "wide, cartoon-like roads" is a stronger statement than the
-    // earlier 4x turned out to be. Anything not a real road class (path,
+    // Real road classes get widened; anything not a real road class (path,
     // sidewalk, track, rail) gets width 0 — genuinely hidden, not just left
-    // thin and unstyled.
-    map.setPaintProperty(layerId, "line-width", ["match", ["get", "class"], roadClasses, ["*", 6, original], 0]);
+    // thin and unstyled. Casing layers pass a larger multiplier than fills so
+    // the extra width reads as a sidewalk/curb band on each side of the road.
+    map.setPaintProperty(layerId, "line-width", ["match", ["get", "class"], roadClasses, ["*", multiplier, original], 0]);
   } catch { /* this layer may not support line-width as expected — skip it */ }
 }
 
@@ -1711,25 +1713,59 @@ function applyArtDistrictTheme(map, night) {
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
       else if (layer.type === "line" && layer["source-layer"] === "transportation") {
-        // Real road data (OpenMapTiles schema, the standard this style is built on)
-        // puts every road AND every sidewalk/footpath/cycleway inside this one
-        // layer, distinguished by a "class" property per segment — not by
-        // separate layer names. Matching on layer.id alone (the previous
-        // approach) couldn't actually tell them apart, which is why roads looked
-        // unstyled/thin and sidewalks stayed visible — both were the same bug.
-        // This colors real vehicle-road classes and makes everything else
-        // (path, track, rail, ferry) fully transparent and zero-width instead
-        // of just leaving it in its default style.
+        // OpenMapTiles schema: every road AND every sidewalk/footpath lives in
+        // this one source-layer, distinguished by a per-segment "class". The
+        // Liberty style additionally pairs every road fill layer with a
+        // "*_casing" layer drawn underneath it — that casing IS our sidewalk:
+        // painted warm concrete and widened MORE than the asphalt fill, the
+        // extra width pokes out on both sides as a curb/sidewalk band.
         const MAJOR = ["motorway", "trunk", "primary"];
         const MINOR = ["secondary", "tertiary", "minor", "service"];
-        map.setPaintProperty(layer.id, "line-color", ["match", ["get", "class"], MAJOR, p.road, MINOR, p.roadMinor, "rgba(0,0,0,0)"]);
-        widenRoadLayer(map, layer.id, [...MAJOR, ...MINOR]);
+        if (/_casing$/.test(layer.id)) {
+          map.setPaintProperty(layer.id, "line-color", ["match", ["get", "class"], [...MAJOR, ...MINOR], p.sidewalk, "rgba(0,0,0,0)"]);
+          widenRoadLayer(map, layer.id, [...MAJOR, ...MINOR], 8);
+        } else {
+          map.setPaintProperty(layer.id, "line-color", ["match", ["get", "class"], MAJOR, p.road, MINOR, p.roadMinor, "rgba(0,0,0,0)"]);
+          widenRoadLayer(map, layer.id, [...MAJOR, ...MINOR], 6);
+        }
       }
       else if (layer.type === "symbol") {
         map.setPaintProperty(layer.id, "text-color", p.label);
         map.setPaintProperty(layer.id, "text-halo-color", p.halo);
       }
     } catch { /* this layer doesn't support this paint property — skip it, don't break the rest */ }
+  });
+  addLaneMarkings(map, p);
+}
+
+/**
+ * Dashed center-line lane markings on major roads only — minor/residential
+ * streets stay clean. Each marking layer clones its road layer's source and
+ * filter and is inserted DIRECTLY above that road layer in the style order, so
+ * markings sit on the asphalt but under buildings, labels, and everything else.
+ */
+function addLaneMarkings(map, p) {
+  const targets = ["road_motorway", "road_trunk_primary", "road_secondary_tertiary",
+    "bridge_motorway", "bridge_trunk_primary", "bridge_secondary_tertiary"];
+  let layers = [];
+  try { layers = map.getStyle().layers || []; } catch { return; }
+  targets.forEach(id => {
+    try {
+      if (!map.getLayer(id) || map.getLayer(id + "-lanes")) return;
+      const idx = layers.findIndex(l => l.id === id);
+      const beforeId = idx >= 0 && layers[idx + 1] ? layers[idx + 1].id : undefined;
+      const src = map.getLayer(id);
+      const filter = map.getFilter(id);
+      map.addLayer({
+        id: id + "-lanes", type: "line", source: src.source, "source-layer": "transportation",
+        ...(filter ? { filter } : {}), minzoom: 13,
+        paint: {
+          "line-color": p.laneMarking,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.5, 16, 1.4, 18, 2.4],
+          "line-dasharray": [2.5, 3.5],
+        },
+      }, beforeId);
+    } catch { /* a missing target layer in this style build is fine — skip */ }
   });
 }
 
