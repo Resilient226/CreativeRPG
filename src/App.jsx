@@ -1874,7 +1874,15 @@ function createBuildingModelsLayer() {
             // specific latitude (Mercator projection distorts scale, so this isn't a
             // constant — it has to be computed per-location).
             const merc = maplibregl.MercatorCoordinate.fromLngLat([e.lng, e.lat], 0);
-            const scale = merc.meterInMercatorCoordinateUnits();
+            const metersScale = merc.meterInMercatorCoordinateUnits();
+            // The model's actual native geometry measures roughly 0.9 x 1.3 x 0.9
+            // units (checked directly against the real GLB data) — far too small
+            // to represent real meters as-is. This multiplier brings it up to
+            // roughly a real 10m-tall small commercial building; it's a reasoned
+            // estimate from the measured bounds, not a precise architectural value.
+            const REAL_WORLD_SIZE_CORRECTION = 8;
+            const scale = metersScale * REAL_WORLD_SIZE_CORRECTION;
+            console.log(`[building-models-3d] placing ${e.name || e.id} at`, { merc, scale });
             const model = templateScene.clone();
             model.position.set(merc.x, merc.y, merc.z);
             // Standard Y-up (Three.js) to Mercator-space correction — the
@@ -1888,10 +1896,14 @@ function createBuildingModelsLayer() {
           if (gltfCache[style.buildingModel]) { placeAt(gltfCache[style.buildingModel]); }
           else {
             loader.load(`/buildings/${style.buildingModel}.glb`, gltf => {
+              console.log(`[building-models-3d] loaded ${style.buildingModel}.glb successfully`);
               gltfCache[style.buildingModel] = gltf.scene;
               placeAt(gltf.scene);
               this.map.triggerRepaint();
-            }, undefined, () => { /* model failed to load — entity just has no embedded building, not a crash */ });
+            }, undefined, err => {
+              console.error(`[building-models-3d] FAILED to load /buildings/${style.buildingModel}.glb:`, err);
+              alert(`Building model failed to load: ${style.buildingModel}.glb — ${err?.message || err}`);
+            });
           }
         });
       });
@@ -1982,6 +1994,7 @@ const MARKER_ANIMATIONS = `
   @keyframes beamFlicker { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
   @keyframes avatarWalkBob { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.03); } }
   @keyframes avatarIdleSway { 0%,100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
+  @keyframes cubeSpin { 0% { transform: rotate(45deg) rotateY(0deg); } 100% { transform: rotate(45deg) rotateY(360deg); } }
 `;
 const CATEGORY_MARKER_STYLE = {
   gallery: { glow: "#D9A441", emoji: "🖼️", buildingModel: "building-a" },
@@ -2009,15 +2022,18 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
     <button onClick={onClick} style={{ background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
       <style>{MARKER_ANIMATIONS}</style>
       {/* Categories with a real buildingModel show no floating icon at all —
-          the actual 3D building is now embedded at ground level via the custom
+          the actual 3D building is embedded at ground level via the custom
           layer (createBuildingModelsLayer), not duplicated here as a floating
-          copy. The beam + label below still provide the click target and the
-          "this is important" visual cue. */}
+          copy. Everything else gets a glowing cube instead of an emoji — a CSS
+          approximation of a real 3D cube (can't render actual 3D geometry in a
+          DOM marker), color-matched to the category, with a slow spin to read
+          as a floating object rather than a flat icon. */}
       {!style.buildingModel && (
-        <span style={{ "--glow": style.glow, fontSize: selected ? 30 : 24, animation,
-          filter: `drop-shadow(0 0 6px ${style.glow}) drop-shadow(0 0 10px ${style.glow}88)` }}>
-          {style.emoji}
-        </span>
+        <div style={{ "--glow": style.glow, width: selected ? 26 : 20, height: selected ? 26 : 20,
+          background: `linear-gradient(135deg, #fff8, ${style.glow})`,
+          border: `1.5px solid ${style.glow}`, borderRadius: 3,
+          animation: `${animation}, cubeSpin 4s linear infinite`,
+          boxShadow: `0 0 10px 2px ${style.glow}cc` }} />
       )}
       {label && <div style={{ background: "#000000b0", borderRadius: 5, padding: "1px 6px", fontFamily: head, fontSize: 8, color: "#fff", maxWidth: 76, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>}
       <div style={{ width: 3, height: beamHeight, marginTop: 2,
@@ -2234,7 +2250,8 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       applyAtmosphere(map, isNightNow());
       pulseCleanupRef.current = startBuildingPulse(map);
       buildingLayerRef.current = createBuildingModelsLayer();
-      try { map.addLayer(buildingLayerRef.current); } catch { /* custom layers require WebGL2 in some environments — map still works without embedded buildings */ }
+      try { map.addLayer(buildingLayerRef.current); }
+      catch (err) { console.error("building-models-3d layer failed to add:", err); alert(`3D building layer failed to add: ${err?.message || err}`); }
     });
     mapRef.current = map;
     return () => {
