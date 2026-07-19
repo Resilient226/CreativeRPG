@@ -1702,12 +1702,12 @@ function applyArtDistrictTheme(map, night) {
       else if (layer.type === "fill" && /(landuse|park|grass|wood|forest|golf|pitch)/i.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", p.land);
       else if (layer.type === "fill-extrusion") {
         map.setPaintProperty(layer.id, "fill-extrusion-color", p.building);
-        // Background buildings at a genuine low-rise 6m — enough to cast real
+        // Background buildings at a subtle 2m — enough to cast real
         // 3D form at the 72° gameplay pitch instead of reading as painted-on
         // plates. Interactive entity buildings (22m/34m) still tower over
         // these, so the hierarchy is preserved; the beam/halo remains the
         // primary eye-draw.
-        map.setPaintProperty(layer.id, "fill-extrusion-height", 6);
+        map.setPaintProperty(layer.id, "fill-extrusion-height", 2);
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
       else if (layer.type === "line" && layer["source-layer"] === "transportation") {
@@ -1751,9 +1751,9 @@ function addBuildingExtrusion(map, night) {
       id: "art-district-buildings-3d", type: "fill-extrusion", source: vectorSourceId, "source-layer": "building",
       paint: {
         "fill-extrusion-color": night ? ART_DISTRICT_PALETTE.night.building : ART_DISTRICT_PALETTE.day.building,
-        // Same 6m low-rise rule as the theme function applies to a
+        // Same 2m low-rise rule as the theme function applies to a
         // pre-existing building layer — fallback matches the real thing.
-        "fill-extrusion-height": 6,
+        "fill-extrusion-height": 2,
         "fill-extrusion-base": 0,
         "fill-extrusion-opacity": BUILDING_OPACITY_BASELINE,
       },
@@ -1840,6 +1840,7 @@ function createBuildingModelsLayer() {
       this.map = map;
       this.camera = new THREE.Camera();
       this.scene = new THREE.Scene();
+      this.clock = new THREE.Clock(); // drives the player robot's walk-cycle mixer
       this.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
       const sun = new THREE.DirectionalLight(0xffffff, 0.55);
       sun.position.set(0, -1, 1);
@@ -1849,6 +1850,7 @@ function createBuildingModelsLayer() {
     },
     render(gl, matrix) {
       this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
+      if (this.playerMixer) this.playerMixer.update(this.clock.getDelta());
       this.renderer.resetState();
       this.renderer.render(this.scene, this.camera);
       this.map.triggerRepaint();
@@ -1884,9 +1886,15 @@ function createBuildingModelsLayer() {
             console.log(`[building-models-3d] placing ${e.name || e.id} at`, { merc, scale });
             const model = templateScene.clone();
             model.position.set(merc.x, merc.y, merc.z);
-            // Standard Y-up (Three.js) to Mercator-space correction — the
-            // established pattern for this exact integration, not an arbitrary guess.
-            model.rotation.x = Math.PI / 2;
+            // Y-up glTF into Mercator space. Three.js composes Object3D
+            // transforms as position→rotation→scale, so with the mirrored-Y
+            // scale below, the rotation must be -90° here — +90° (the previous
+            // value) composed in this order sends the model's height axis
+            // NEGATIVE, rendering every building mirrored underground. This
+            // -90°/(s,-s,s) pair is matrix-identical to the canonical
+            // translate·scale(s,-s,s)·rotateX(+90°) pattern from the official
+            // custom-layer example.
+            model.rotation.x = -Math.PI / 2;
             model.scale.set(scale, -scale, scale);
             this.scene.add(model);
             placed.set(e.id, model);
@@ -1910,6 +1918,53 @@ function createBuildingModelsLayer() {
       for (const [id, model] of placed) {
         if (!seenIds.has(id)) { this.scene.remove(model); placed.delete(id); }
       }
+    },
+    // The player robot, rendered in real world space at a genuine 15 meters
+    // tall — a true in-world giant, not a screen-pixel marker. Called manually
+    // (from WorldEngine_'s position effect) on every GPS/heading update.
+    updatePlayer(pos) {
+      if (!pos) return;
+      const ROBOT_HEIGHT_METERS = 15;
+      const NATIVE_HEIGHT = 1.78; // measured directly from the GLB's geometry bounds
+      if (!this.playerGroup) {
+        if (this.playerLoading) { this.pendingPlayerPos = pos; return; }
+        this.playerLoading = true;
+        this.pendingPlayerPos = pos;
+        loader.load(`/avatars/robot.glb`, gltf => {
+          // Outer group carries the Y-up→Mercator axis correction (same
+          // -90°/(s,-s,s) pair as the building models); the inner child is
+          // free to rotate around its own upright axis for compass heading.
+          const group = new THREE.Group();
+          group.rotation.x = -Math.PI / 2;
+          const child = gltf.scene;
+          group.add(child);
+          this.scene.add(group);
+          this.playerGroup = group;
+          this.playerChild = child;
+          if (gltf.animations && gltf.animations.length) {
+            this.playerMixer = new THREE.AnimationMixer(child);
+            this.playerAction = this.playerMixer.clipAction(gltf.animations[0]);
+            this.playerAction.play();
+            this.playerAction.paused = true; // standing until real movement says otherwise
+          }
+          const p = this.pendingPlayerPos; this.pendingPlayerPos = null;
+          if (p) this.updatePlayer(p);
+          this.map.triggerRepaint();
+        }, undefined, err => {
+          this.playerLoading = false;
+          console.error("[building-models-3d] FAILED to load player robot:", err);
+        });
+        return;
+      }
+      const merc = maplibregl.MercatorCoordinate.fromLngLat([pos.lng, pos.lat], 0);
+      const s = merc.meterInMercatorCoordinateUnits() * (ROBOT_HEIGHT_METERS / NATIVE_HEIGHT);
+      this.playerGroup.position.set(merc.x, merc.y, merc.z);
+      this.playerGroup.scale.set(s, -s, s);
+      // Compass heading → model yaw. 180° offset because the model's forward
+      // (+Z) lands facing map-south under the axis correction; heading sign
+      // may need one flip after a real on-device look — it's a single constant.
+      this.playerChild.rotation.y = THREE.MathUtils.degToRad(180 - (pos.heading ?? 0));
+      if (this.playerAction) this.playerAction.paused = !pos.isMoving;
     },
   };
 }
@@ -2086,11 +2141,26 @@ function PlayerAvatar({ heading, avatarModel = "robot", isMoving = false }) {
     return () => mv.removeEventListener("load", apply);
   }, [isMoving, hasRealAnimation]);
   return (
-    <div style={{ position: "relative", width: 64, height: 72, display: "flex", flexDirection: "column",
-      alignItems: "center" }}>
+    <div style={{ position: "relative", width: 80, height: 100 }}>
       <style>{MARKER_ANIMATIONS}</style>
-      <div style={{ width: 64, height: 64, borderRadius: "50%", overflow: "hidden", background: "#1a1420cc",
-        border: "3px solid #5BD9E8", boxShadow: "0 0 12px 3px #5BD9E888",
+      {/* Ground contact shadow — grounds the character on the street. This
+          replaces the old circular bubble entirely: no mask, no border, no
+          dark backdrop. The robot stands in the world like a game character,
+          not inside a badge. */}
+      <div style={{ position: "absolute", left: "50%", bottom: 2, transform: "translateX(-50%)",
+        width: 48, height: 14, borderRadius: "50%",
+        background: "radial-gradient(ellipse at center, #00000075 0%, #5BD9E822 55%, transparent 72%)" }} />
+      {heading != null && (
+        // Heading indicator: a small chevron that orbits the ground shadow,
+        // pointing the direction of travel — the only element that rotates.
+        <div style={{ position: "absolute", left: "50%", bottom: -16, transform: `translateX(-50%) rotate(${heading}deg)`,
+          transformOrigin: "50% 50%", width: 50, height: 50, pointerEvents: "none" }}>
+          <div style={{ position: "absolute", top: -4, left: "50%", transform: "translateX(-50%)",
+            width: 0, height: 0, borderLeft: "5px solid transparent", borderRight: "5px solid transparent",
+            borderBottom: "9px solid #5BD9E8", filter: "drop-shadow(0 0 3px #5BD9E8)" }} />
+        </div>
+      )}
+      <div style={{ position: "absolute", inset: 0,
         animation: hasRealAnimation
           ? "none" // the model itself walks — layering a CSS bob on top would double the motion
           : isMoving ? "avatarWalkBob 0.5s ease-in-out infinite" : "avatarIdleSway 2.4s ease-in-out infinite" }}>
@@ -2099,20 +2169,11 @@ function PlayerAvatar({ heading, avatarModel = "robot", isMoving = false }) {
             actually compensating for the marker-wide heading rotation (a heading
             near 180° flipped the whole circle). With the character now locked
             upright, the model renders in its natural pose. */}
-        <model-viewer ref={mvRef} src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 82deg 2.6m" disable-zoom
+        <model-viewer ref={mvRef} src={`/avatars/${avatarModel}.glb`} camera-orbit="0deg 86deg 2.1m" disable-zoom
           autoplay={hasRealAnimation ? "" : undefined}
-          interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent" }} />
+          interaction-prompt="none" style={{ width: "100%", height: "100%", "--poster-color": "transparent",
+            background: "transparent", filter: "drop-shadow(0 2px 6px #00000066)" }} />
       </div>
-      {heading != null && (
-        // Heading arrow orbits the circle's edge, pointing the direction of
-        // travel — the only element that rotates with the compass.
-        <div style={{ position: "absolute", top: 0, left: 0, width: 64, height: 64, pointerEvents: "none",
-          transform: `rotate(${heading}deg)`, transformOrigin: "50% 50%" }}>
-          <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)",
-            width: 0, height: 0, borderLeft: "6px solid transparent", borderRight: "6px solid transparent",
-            borderBottom: "10px solid #5BD9E8", filter: "drop-shadow(0 0 3px #5BD9E8)" }} />
-        </div>
-      )}
     </div>
   );
 }
@@ -2121,7 +2182,6 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]); // { marker, root } — so React roots get cleanly unmounted, not leaked
-  const avatarRef = useRef(null); // { marker, root } — the player's own avatar, separate from entity markers
   const hasArrivedRef = useRef(false); // gates the one-time arrival flyTo vs. ongoing quick follow
   const isAnimatingRef = useRef(false); // true during any flyTo — guards against the center-lock fighting it
   const worldBuilderActiveRef = useRef(false);
@@ -2281,7 +2341,6 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
       if (pulseCleanupRef.current) pulseCleanupRef.current();
-      if (avatarRef.current) { avatarRef.current.root.unmount(); avatarRef.current.marker.remove(); avatarRef.current = null; }
       map.remove(); mapRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2331,14 +2390,9 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !playerPosition) return;
-    if (!avatarRef.current) {
-      const el = document.createElement("div");
-      const root = ReactDOM.createRoot(el);
-      avatarRef.current = { marker: new maplibregl.Marker({ element: el }).setLngLat([playerPosition.lng, playerPosition.lat]).addTo(map), root };
-    } else {
-      avatarRef.current.marker.setLngLat([playerPosition.lng, playerPosition.lat]);
-    }
-    avatarRef.current.root.render(<PlayerAvatar heading={playerPosition.heading} avatarModel={avatarModel} isMoving={playerPosition.isMoving} />);
+    // The robot lives in the 3D scene at true world scale — position, heading,
+    // and walk/stand state all update through the custom layer, not a marker.
+    if (buildingLayerRef.current) buildingLayerRef.current.updatePlayer(playerPosition);
     if (!interior) {
       if (!hasArrivedRef.current) {
         // The arrival sequence: camera flies smoothly from the wide establishing
