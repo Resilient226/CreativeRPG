@@ -1702,12 +1702,12 @@ function applyArtDistrictTheme(map, night) {
       else if (layer.type === "fill" && /(landuse|park|grass|wood|forest|golf|pitch)/i.test(layer.id)) map.setPaintProperty(layer.id, "fill-color", p.land);
       else if (layer.type === "fill-extrusion") {
         map.setPaintProperty(layer.id, "fill-extrusion-color", p.building);
-        // Background buildings at a subtle 2m — enough to cast real
+        // Background buildings at a near-flat 0.5m — enough to cast real
         // 3D form at the 72° gameplay pitch instead of reading as painted-on
         // plates. Interactive entity buildings (22m/34m) still tower over
         // these, so the hierarchy is preserved; the beam/halo remains the
         // primary eye-draw.
-        map.setPaintProperty(layer.id, "fill-extrusion-height", 2);
+        map.setPaintProperty(layer.id, "fill-extrusion-height", 0.5);
         map.setPaintProperty(layer.id, "fill-extrusion-opacity", BUILDING_OPACITY_BASELINE);
       }
       else if (layer.type === "line" && layer["source-layer"] === "transportation") {
@@ -1751,9 +1751,9 @@ function addBuildingExtrusion(map, night) {
       id: "art-district-buildings-3d", type: "fill-extrusion", source: vectorSourceId, "source-layer": "building",
       paint: {
         "fill-extrusion-color": night ? ART_DISTRICT_PALETTE.night.building : ART_DISTRICT_PALETTE.day.building,
-        // Same 2m low-rise rule as the theme function applies to a
+        // Same 0.5m low-rise rule as the theme function applies to a
         // pre-existing building layer — fallback matches the real thing.
-        "fill-extrusion-height": 2,
+        "fill-extrusion-height": 0.5,
         "fill-extrusion-base": 0,
         "fill-extrusion-opacity": BUILDING_OPACITY_BASELINE,
       },
@@ -1898,7 +1898,36 @@ function createBuildingModelsLayer() {
           .scale(new THREE.Vector3(this.refK, this.refK, this.refK)));
       }
       this.camera.projectionMatrix = m;
-      if (this.playerMixer) this.playerMixer.update(this.clock.getDelta());
+      // One shared per-frame delta (capped so a backgrounded tab doesn't
+      // produce one giant catch-up step when it wakes).
+      const dt = Math.min(this.clock.getDelta(), 0.1);
+      // Per-frame player interpolation: GPS hands us a new target every few
+      // seconds; the robot GLIDES there instead of teleporting. Exponential
+      // smoothing is frame-rate independent, so the ease-out feel is the same
+      // at 30 or 60 FPS.
+      if (this.playerGroup && this.playerCur && this.playerTarget) {
+        const cur = this.playerCur, tgt = this.playerTarget;
+        const dx = tgt.x - cur.x, dy = tgt.y - cur.y;
+        const remaining = Math.hypot(dx, dy); // meters still to travel
+        const ease = 1 - Math.exp(-3.2 * dt);
+        cur.x += dx * ease; cur.y += dy * ease;
+        this.playerGroup.position.set(cur.x, cur.y, 0);
+        const moving = remaining > 0.6;
+        // While moving, face the direction of actual travel (computed from the
+        // motion vector — smoother and more truthful than raw compass jitter);
+        // when settled, ease toward the compass heading if one exists.
+        let desiredYaw = cur.yaw;
+        if (moving) desiredYaw = -Math.atan2(dx, -dy); // travel bearing → yaw (scene y = map south)
+        else if (tgt.heading != null) desiredYaw = -THREE.MathUtils.degToRad(tgt.heading);
+        let dyaw = desiredYaw - cur.yaw;
+        dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw)); // shortest arc, no 350° spins
+        cur.yaw += dyaw * Math.min(1, 6 * dt);
+        this.playerChild.rotation.y = cur.yaw;
+        // Walk animation follows what the eye sees: playing while the robot is
+        // visibly traveling, standing once it settles.
+        if (this.playerAction) this.playerAction.paused = !moving;
+      }
+      if (this.playerMixer) this.playerMixer.update(dt);
       this.renderer.resetState();
       this.renderer.render(this.scene, this.camera);
       this.map.triggerRepaint();
@@ -2004,14 +2033,16 @@ function createBuildingModelsLayer() {
       }
       const local = this.toLocalMeters(pos.lng, pos.lat);
       const s = ROBOT_HEIGHT_METERS / NATIVE_HEIGHT; // plain meters — no Mercator scaling here
-      this.playerGroup.position.set(local.x, local.y, 0);
       this.playerGroup.scale.set(s, s, s);
-      // Compass heading → model yaw. Under the pure rotX(+90°) correction the
-      // model's forward (+Z) faces map-north at zero yaw, and compass heading
-      // is clockwise while three.js yaw is counterclockwise — hence the plain
-      // negation. If the robot faces the wrong way on device, flip this sign.
-      this.playerChild.rotation.y = -THREE.MathUtils.degToRad(pos.heading ?? 0);
-      if (this.playerAction) this.playerAction.paused = !pos.isMoving;
+      if (!this.playerCur) {
+        // Very first fix: appear in place — no dramatic glide in from the origin.
+        this.playerCur = { x: local.x, y: local.y, yaw: -THREE.MathUtils.degToRad(pos.heading ?? 0) };
+        this.playerGroup.position.set(local.x, local.y, 0);
+        this.playerChild.rotation.y = this.playerCur.yaw;
+      }
+      // Everything else is a TARGET — the render loop glides the robot there
+      // frame by frame (position, turning, and walk animation all live there).
+      this.playerTarget = { x: local.x, y: local.y, heading: pos.heading };
     },
   };
 }
@@ -2450,22 +2481,36 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         hasArrivedRef.current = true;
         isAnimatingRef.current = true;
         map.flyTo({
-          center: [playerPosition.lng, playerPosition.lat], zoom: DEFAULT_ZOOM, pitch: 72,
+          center: [playerPosition.lng, playerPosition.lat], zoom: DEFAULT_ZOOM, pitch: 76,
           bearing: playerPosition.heading != null ? playerPosition.heading : map.getBearing(),
+          // Positive-y offset pushes the centered point DOWN the screen — the
+          // avatar lands in the bottom third with the world opening up ahead,
+          // the Pokémon-GO-style framing, instead of dead center like a map pin.
+          offset: [0, Math.round(map.getContainer().clientHeight * 0.18)],
           duration: 2600, essential: true,
         });
         // Safety net: if anything (a touch, another effect) still knocked the
         // pitch off target during the animation, correct it once flyTo's
         // duration has elapsed rather than leaving the camera stuck flatter
         // than intended.
-        setTimeout(() => { if (mapRef.current && Math.abs(mapRef.current.getPitch() - 72) > 1) mapRef.current.setPitch(72); }, 2700);
+        setTimeout(() => { if (mapRef.current && Math.abs(mapRef.current.getPitch() - 76) > 1) mapRef.current.setPitch(76); }, 2700);
       } else {
         // Only follows (recenters) while not inside a specific entity's interior
         // scene, and not in World Builder free-roam — walking around shouldn't
         // yank you out of something you're viewing, and free-roam shouldn't keep
         // snapping back to your real position while you're deliberately exploring
         // away from it.
-        if (!worldBuilderActive) map.easeTo({ center: [playerPosition.lng, playerPosition.lat], duration: 800 });
+        // Long duration + LINEAR easing = continuous glide. Each new GPS fix
+        // replaces the previous ease mid-flight, so with default ease-out the
+        // camera visibly surged and settled on every update — that was the
+        // follow jitter. Linear easing makes consecutive eases chain into one
+        // smooth track, matching the robot's own interpolated glide. Same
+        // bottom-third offset as the arrival framing so nothing jumps.
+        if (!worldBuilderActive) map.easeTo({
+          center: [playerPosition.lng, playerPosition.lat],
+          offset: [0, Math.round(map.getContainer().clientHeight * 0.18)],
+          duration: 2200, easing: t => t, essential: true,
+        });
       }
     }
   }, [playerPosition, mapReady, interior, avatarModel, worldBuilderActive]);
