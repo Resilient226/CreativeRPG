@@ -179,12 +179,6 @@ function nextSpot() { const s = SPARE_SPOTS[spotCursor % SPARE_SPOTS.length]; sp
 // (loaded in index.html) — no hand-written Three.js scene setup needed.
 const AVATAR_OPTIONS = [
   { key: "robot", label: "Robot" },
-  { key: "character-female-a", label: "Female A" }, { key: "character-female-b", label: "Female B" },
-  { key: "character-female-c", label: "Female C" }, { key: "character-female-d", label: "Female D" },
-  { key: "character-female-e", label: "Female E" }, { key: "character-female-f", label: "Female F" },
-  { key: "character-male-a", label: "Male A" }, { key: "character-male-b", label: "Male B" },
-  { key: "character-male-c", label: "Male C" }, { key: "character-male-d", label: "Male D" },
-  { key: "character-male-e", label: "Male E" }, { key: "character-male-f", label: "Male F" },
 ];
 
 // Avatars whose GLB carries a real skeletal animation clip (e.g. the robot's
@@ -967,7 +961,7 @@ export default function CreativeEmpireOS() {
           <MapScreen_
             nodes={allNodes} quests={quests} events={events} energy={energy}
             onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
-            playerPosition={effectivePlayerPosition} avatarModel={profile?.avatarModel} onCollectDrop={collectDrop} worldBuilderActive={worldBuilderActive}
+            playerPosition={effectivePlayerPosition} avatarModel="robot" onCollectDrop={collectDrop} worldBuilderActive={worldBuilderActive}
             onPublishLocation={publishWorldBuilderLocation} jumpTrigger={jumpTrigger}
             onExitWorldBuilder={() => { setWorldBuilderActive(false); setSimulatedPosition(null); flash("Exited World Builder — back to your real position."); }}
             onJumpToAddress={async (address) => {
@@ -2069,7 +2063,7 @@ function getMarkerCategory(e) {
  * approximation (not true 3D yaw inside the model-viewer scene), the right
  * trade-off for something rendered at marker scale, not a full 3D character screen.
  */
-function PlayerAvatar({ heading, avatarModel = "character-male-a", isMoving = false }) {
+function PlayerAvatar({ heading, avatarModel = "robot", isMoving = false }) {
   // The character stays upright at all times. Rotating the whole marker by
   // compass heading (the previous approach) tipped the character onto its side
   // or head whenever you faced east/west/south — heading is now applied only
