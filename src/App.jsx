@@ -1658,7 +1658,11 @@ const ART_DISTRICT_PALETTE = {
   // road surface itself, so streets read as real streets while the world keeps
   // its premium gold-on-navy character.
   night: { bg: "#1B3A5C", building: "#c9a878", road: "#2F333B", roadMinor: "#3A3E47", sidewalk: "#8A8065", laneMarking: "#E8D9A8", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
-  day: { bg: "#6EB5E8", building: "#e0c29c", road: "#3D424C", roadMinor: "#484D58", sidewalk: "#A69B7C", laneMarking: "#F5E7B8", water: "#1a4f4d", land: "#96b08e", label: "#3a2a1a", halo: "#fff8ea" },
+  // Day ground is warm sand, NOT sky blue — painting the ground the same color
+  // as the sky made the whole city read as floating. Warm ground + asphalt
+  // streets + cream buildings gives the golden-hour contrast from the concept
+  // art: streets clearly darker than ground, buildings clearly lighter.
+  day: { bg: "#CFC5AC", building: "#EAD9B8", road: "#3D424C", roadMinor: "#484D58", sidewalk: "#B0A487", laneMarking: "#F5E7B8", water: "#3F7E8C", land: "#9DBA8C", label: "#3a2a1a", halo: "#fff8ea" },
 };
 // Non-interactive buildings sit back at partial opacity so real entity locations
 // naturally draw the eye — this is the actual mechanism behind "important places
@@ -1913,12 +1917,30 @@ function createBuildingModelsLayer() {
       this.camera = new THREE.Camera();
       this.scene = new THREE.Scene();
       this.clock = new THREE.Clock(); // drives the player robot's walk-cycle mixer
-      this.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
-      const sun = new THREE.DirectionalLight(0xffffff, 0.55);
-      sun.position.set(0, -1, 1);
-      this.scene.add(sun);
+      // Golden-hour rig: warm sky light with cool navy bounce from below,
+      // plus a low warm sun from the west that casts REAL soft shadows.
+      this.scene.add(new THREE.HemisphereLight(0xffe0b8, 0x2b3550, 0.55));
+      this.scene.add(new THREE.AmbientLight(0xfff0dd, 0.45));
+      const sun = new THREE.DirectionalLight(0xffb36b, 1.15);
+      sun.position.set(-180, -60, 130); // low in the west — long evening shadows
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(1024, 1024);
+      Object.assign(sun.shadow.camera, { left: -300, right: 300, top: 300, bottom: -300, near: 1, far: 900 });
+      this.scene.add(sun); this.scene.add(sun.target);
+      this.sun = sun;
+      // Invisible shadow-catcher: the map itself can't receive three.js
+      // shadows, so this transparent plane rides along at ground level and
+      // catches the robot's and buildings' shadows — the single biggest
+      // "it's really standing there" grounding cue.
+      const catcher = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), new THREE.ShadowMaterial({ opacity: 0.25 }));
+      catcher.receiveShadow = true;
+      catcher.position.z = 0.05;
+      this.scene.add(catcher);
+      this.shadowGround = catcher;
       this.renderer = new THREE.WebGLRenderer({ canvas: map.getCanvas(), context: gl, antialias: true });
       this.renderer.autoClear = false;
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     },
     render(gl, matrix) {
       // The scene lives in METERS near a local origin; this composes the
@@ -2001,6 +2023,20 @@ function createBuildingModelsLayer() {
             const REAL_WORLD_SIZE_CORRECTION = 8;
             const local = this.toLocalMeters(e.lng, e.lat);
             const model = templateScene.clone();
+            // Hero-building treatment: cast real shadows, and clone materials
+            // with a faint warm emissive so windows/surfaces read as lit from
+            // within at golden hour — the honest approximation of "glowing
+            // windows + bloom" available without a postprocessing pass.
+            model.traverse(node => {
+              if (node.isMesh) {
+                node.castShadow = true;
+                if (node.material && node.material.emissive !== undefined) {
+                  node.material = node.material.clone();
+                  node.material.emissive = new THREE.Color(0xffa64d);
+                  node.material.emissiveIntensity = 0.14;
+                }
+              }
+            });
             model.position.set(local.x, local.y, 0);
             // Pure rotation, positive scale: local Y-up → scene Z-up with
             // nothing mirrored (mirrored scale flips winding/normals).
@@ -2048,6 +2084,7 @@ function createBuildingModelsLayer() {
           const group = new THREE.Group();
           group.rotation.x = Math.PI / 2;
           const child = gltf.scene;
+          child.traverse(node => { if (node.isMesh) node.castShadow = true; });
           group.add(child);
           this.scene.add(group);
           this.playerGroup = group;
@@ -2079,6 +2116,14 @@ function createBuildingModelsLayer() {
       // Everything else is a TARGET — the render loop glides the robot there
       // frame by frame (position, turning, and walk animation all live there).
       this.playerTarget = { x: local.x, y: local.y, heading: pos.heading };
+      // The sun, its shadow frustum, and the shadow-catcher plane all follow
+      // the player — otherwise shadows silently stop working once you walk a
+      // few hundred meters from wherever the layer first initialized.
+      if (this.sun) {
+        this.sun.position.set(local.x - 180, local.y - 60, 130);
+        this.sun.target.position.set(local.x, local.y, 0);
+      }
+      if (this.shadowGround) this.shadowGround.position.set(local.x, local.y, 0.05);
     },
   };
 }
