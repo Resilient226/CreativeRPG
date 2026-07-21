@@ -2245,45 +2245,54 @@ function createBuildingModelsLayer() {
             model.rotation.x = Math.PI / 2;
             model.scale.set(REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION * 1.2, REAL_WORLD_SIZE_CORRECTION);
             container.add(model);
-            // Floating collectible above the roof — spins and bobs in the
-            // render loop, the classic "there's something here for you" beacon.
-            const gem = new THREE.Mesh(
-              new THREE.OctahedronGeometry(1.3),
-              new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffb347, emissiveIntensity: 1.4, metalness: 0.3, roughness: 0.25 })
-            );
-            gem.position.set(0, 0, 16);
-            gem.userData.baseZ = 16;
-            container.add(gem);
-            container.userData.gem = gem;
-            // THE BEACON, done correctly this time: a real 3D cylinder, not an
-            // HTML/CSS overlay. Every "the beam floats / lifts off the ground
-            // as I walk away" report traced back to the same root cause: a flat
-            // 2D DOM element pasted on top of a true 3D perspective scene can
-            // never fully track camera distance/angle the way real geometry
-            // does — which is exactly why the building and gem right next to
-            // it never had this problem. This beam is anchored in the SAME
-            // container, at the SAME local-meter coordinate, so it is
-            // physically part of the building's own transform: its base is
-            // geometrically welded to the building's ground point at every
-            // distance and every camera angle, by construction, not by
-            // approximation. Tall enough to spot over neighboring rooftops —
-            // preserves the "beacon so I know there's more elsewhere" role.
-            const beam = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.35, 0.55, 70, 8, 1, true),
-              new THREE.MeshBasicMaterial({ color: 0xffc169, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false })
-            );
-            beam.position.set(0, 0, 35); // half of the 70-tall cylinder, so its BASE sits exactly at the building's ground point (z=0)
-            container.add(beam);
-            container.userData.beam = beam;
-            // Warm accent light on the facade. Capped so a dense district can't
-            // stack up dozens of live point lights and tank the frame rate.
-            if (placed.size < 8) {
-              const accent = new THREE.PointLight(0xffc07a, 30, 45, 2);
-              accent.position.set(0, 0, 12);
-              container.add(accent);
-            }
+            // The BUILDING itself goes into the scene right here, immediately —
+            // before any of the decorative extras below are attempted. That
+            // way, if a gem/beam/light addition ever throws for any reason,
+            // the building the player actually needs to see has already been
+            // committed to the scene and stays put; a decorative failure can
+            // no longer take the whole hero location down with it.
             this.scene.add(container);
             placed.set(e.id, container);
+            try {
+              // Floating collectible above the roof — spins and bobs in the
+              // render loop, the classic "there's something here for you" beacon.
+              const gem = new THREE.Mesh(
+                new THREE.OctahedronGeometry(1.3),
+                new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffb347, emissiveIntensity: 1.4, metalness: 0.3, roughness: 0.25 })
+              );
+              gem.position.set(0, 0, 16);
+              gem.userData.baseZ = 16;
+              container.add(gem);
+              container.userData.gem = gem;
+              // THE BEACON: a real 3D cylinder, not an HTML/CSS overlay. Every
+              // "the beam floats / lifts off the ground as I walk away" report
+              // traced back to the same root cause: a flat 2D DOM element
+              // pasted on top of a true 3D perspective scene can never fully
+              // track camera distance/angle the way real geometry does — which
+              // is exactly why the building and gem right next to it never had
+              // this problem. This beam is anchored in the SAME container, at
+              // the SAME local-meter coordinate, so it is physically part of
+              // the building's own transform: its base is geometrically welded
+              // to the building's ground point at every distance and every
+              // camera angle, by construction, not by approximation. Tall
+              // enough to spot over neighboring rooftops.
+              const beam = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.35, 0.55, 70, 8, 1, true),
+                new THREE.MeshBasicMaterial({ color: 0xffc169, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false })
+              );
+              beam.position.set(0, 0, 35); // half of the 70-tall cylinder, so its BASE sits exactly at the building's ground point (z=0)
+              container.add(beam);
+              container.userData.beam = beam;
+              // Warm accent light on the facade. Capped so a dense district
+              // can't stack up dozens of live point lights and tank the frame rate.
+              if (placed.size <= 8) {
+                const accent = new THREE.PointLight(0xffc07a, 30, 45, 2);
+                accent.position.set(0, 0, 12);
+                container.add(accent);
+              }
+            } catch (err) {
+              console.error(`[building-models-3d] hero decoration (gem/beam/light) failed for ${e.name || e.id} — building itself is unaffected:`, err);
+            }
           };
 
           if (gltfCache[style.buildingModel]) { placeAt(gltfCache[style.buildingModel]); }
