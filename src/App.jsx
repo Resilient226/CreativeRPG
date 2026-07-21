@@ -2230,6 +2230,16 @@ function createBuildingModelsLayer() {
               new THREE.CylinderGeometry(0.25, 0.4, 45, 8, 1, true),
               new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false })
             );
+            // CylinderGeometry's height runs along its own local Y-axis by
+            // default — but this scene's "up" is Z (the same reason building
+            // models need rotation.x = Math.PI/2 to stand upright). Without
+            // this same rotation, the beam's long axis pointed along the
+            // scene's horizontal north-south direction the entire time: it
+            // only looked roughly beam-like when viewed nearly end-on, and
+            // showed itself as a diagonal streak from other viewing angles —
+            // which is exactly the artifact reported. This one line is the
+            // actual fix.
+            beam.rotation.x = Math.PI / 2;
             beam.position.set(0, 0, 22.5); // half the 45-tall cylinder — base lands exactly at the entity's ground point
             container.add(beam);
             container.userData.beam = beam;
@@ -2308,6 +2318,13 @@ function createBuildingModelsLayer() {
                 new THREE.CylinderGeometry(0.35, 0.55, 70, 8, 1, true),
                 new THREE.MeshBasicMaterial({ color: 0xffc169, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false })
               );
+              // Same fix as the non-hero beam below: CylinderGeometry's height
+              // runs along local Y by default, but this scene's up axis is Z.
+              // Without this rotation the beam's long axis pointed north-south
+              // (horizontal) instead of vertical — this is the actual root
+              // cause of the whole "floats / lifts / diagonal streak" saga,
+              // not a perspective or ground-compression issue at all.
+              beam.rotation.x = Math.PI / 2;
               beam.position.set(0, 0, 35); // half of the 70-tall cylinder, so its BASE sits exactly at the building's ground point (z=0)
               container.add(beam);
               container.userData.beam = beam;
