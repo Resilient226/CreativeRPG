@@ -2504,7 +2504,14 @@ const CATEGORY_MARKER_STYLE = {
   // a lightweight beam+pin for wayfinding only; isHeroNode() reads this same
   // buildingModel field, so this one change also correctly excludes generic
   // places from hero XP/streak counting.
-  place: { glow: "#D9A441", emoji: "📍", buildingModel: null },
+  // CORRECTION: "place" is not a generic filler category — it's the ONLY kind
+  // World Builder ever assigns to a manually-added real location (Home, The
+  // James Room, murals, venues — everything Zak actually builds). An earlier
+  // change nulled this out, thinking it was catching random/default noise;
+  // it was actually stripping the 3D building from every real curated
+  // location in the app simultaneously. Restored, and correctly: these are
+  // real hero locations and should count for arrival XP/streak too.
+  place: { glow: "#D9A441", emoji: "📍", buildingModel: "building-e" },
 };
 function CustomCategoryMarker({ category, onClick, label, selected = false }) {
   const style = CATEGORY_MARKER_STYLE[category] || CATEGORY_MARKER_STYLE.gallery;
