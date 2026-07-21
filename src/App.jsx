@@ -15,7 +15,7 @@ import { buildUpcomingDeadlines, isUrgentDeadline, consolidateByTitle, filterDea
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
 import { driftNpcOverTime, generatePublicProfile } from "./engines/npcEngine";
-import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation, ACHIEVEMENTS } from "./engines/artistProfileEngine";
+import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation, ACHIEVEMENTS, XP_ACTIONS, buildArchiveEntry } from "./engines/artistProfileEngine";
 import { buildCreativeDrop, getRevealedDrops } from "./engines/collectiblesEngine";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -335,6 +335,10 @@ export default function CreativeEmpireOS() {
   const [unlockedAchievements, setUnlockedAchievements] = useState([]);
   const [archive, setArchive] = useState([]);
   const [discoveredLocations, setDiscoveredLocations] = useState([]);
+  // THE ARRIVAL LOOP — which hero locations you've physically checked into
+  // (entityId -> { ts, name, category }), and the arrival card currently showing.
+  const [checkIns, setCheckIns] = useState({});
+  const [arrival, setArrival] = useState(null);
   const [drops, setDrops] = useState([]);
   const [lastLocationFetch, setLastLocationFetch] = useState(0);
   const [aiNpcMode, setAiNpcMode] = useState(false);
@@ -423,6 +427,7 @@ export default function CreativeEmpireOS() {
         if (save.unlockedAchievements) setUnlockedAchievements(save.unlockedAchievements);
         if (save.archive) setArchive(save.archive);
         if (save.discoveredLocations) setDiscoveredLocations(save.discoveredLocations);
+        if (save.checkIns) setCheckIns(save.checkIns);
         if (save.drops) setDrops(save.drops);
         if (typeof save.lastLocationFetch === "number") setLastLocationFetch(save.lastLocationFetch);
         // Lazy catch-up for practice partners: drift their career state by however
@@ -547,9 +552,9 @@ export default function CreativeEmpireOS() {
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch, drops, lastSeen: Date.now() })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, lastLocationFetch, drops, lastSeen: Date.now() })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, lastLocationFetch, drops]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, lastLocationFetch, drops]);
 
   // Career Director: reads across the other engines and decides what the Command
   // Board should show — re-scoring existing quests and proposing new ones from real
@@ -670,6 +675,7 @@ export default function CreativeEmpireOS() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archive, quests]);
+
   function capKey(tag) { return { CAREER: "Career", RELATIONSHIPS: "Relationships", FINANCES: "Finances", TIME: "Time" }[tag] || "Career"; }
 
   function logInteraction(id) {
@@ -888,6 +894,60 @@ export default function CreativeEmpireOS() {
     { id: "ideas-hub", kind: "idea", name: "Ideas", icon: Lightbulb, color: T.gold, pos: { x: 46, y: 40 } },
   ];
 
+  /* ---------------- THE ARRIVAL LOOP — walk somewhere real, something happens ----------------
+     The whole game in one effect: every few seconds, check whether the player
+     is physically standing at a hero location they haven't discovered (or
+     haven't revisited in 20h). If so: XP, collection entry, archive record
+     (which feeds achievements automatically), and the arrival card. */
+  const arrivalCheckRef = useRef(0);
+  useEffect(() => {
+    if (!playerPosition || tab !== "map" || arrival) return;
+    const now = Date.now();
+    if (now - arrivalCheckRef.current < 3000) return; // GPS streams continuously; a 3s cadence is plenty
+    arrivalCheckRef.current = now;
+    for (const n of allNodes) {
+      if (!isHeroNode(n)) continue;
+      const prior = checkIns[n.id];
+      if (prior && now - prior.ts < HERO_ARRIVAL.revisitCooldownMs) continue;
+      const meters = haversineDistanceKm(playerPosition.lat, playerPosition.lng, n.lat, n.lng) * 1000;
+      if (meters > HERO_ARRIVAL.radiusMeters) continue;
+      const cat = getMarkerCategory(n);
+      const first = !prior;
+      const actionKey = first ? (HERO_ARRIVAL.xpAction[cat] || "check_in") : "check_in";
+      const xpGained = (Object.values(XP_ACTIONS).find(a => a.key === actionKey) || {}).xp || 5;
+      setXp(x => awardXp(x, actionKey));
+      setCheckIns(c => ({ ...c, [n.id]: { ts: now, name: n.name, category: cat } }));
+      // Archive types match summarizeParticipation's counters, so discoveries
+      // feed the achievements system with zero extra wiring.
+      setArchive(a => [{ ...buildArchiveEntry({
+        type: first ? (HERO_ARRIVAL.archiveType[cat] || "check_in") : "check_in",
+        title: `${first ? "Discovered" : "Returned to"} ${n.name}`, placeId: n.id, verified: true,
+      }), ts: now }, ...(a || [])]);
+      setArrival({ id: n.id, name: n.name, category: cat, xpGained, first, story: n.story || n.description || null });
+      break; // one arrival at a time — overlapping venues surface on the next pass
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerPosition, tab]);
+
+  // "Where should I walk next?" — nearest hero location not yet discovered.
+  const nextDiscovery = useMemo(() => {
+    if (!playerPosition) return null;
+    let best = null;
+    for (const n of allNodes) {
+      if (!isHeroNode(n) || checkIns[n.id]) continue;
+      const meters = haversineDistanceKm(playerPosition.lat, playerPosition.lng, n.lat, n.lng) * 1000;
+      if (!best || meters < best.meters) best = { node: n, meters };
+    }
+    return best;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerPosition, checkIns]);
+
+  const heroStats = useMemo(() => {
+    const heroes = allNodes.filter(isHeroNode);
+    return { total: heroes.length, discovered: heroes.filter(h => checkIns[h.id]).length };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkIns, discoveredLocations, places]);
+
   // Auth gate comes first: nothing about the game or onboarding matters until we
   // know who (if anyone) is actually signed in.
   if (authUser === undefined) {
@@ -953,6 +1013,52 @@ export default function CreativeEmpireOS() {
 
       {tab === "home" && <Home_ quests={quests} goal={goal} energy={energy} onToggle={toggleQuest} onViewAll={() => setTab("quests")} profile={profile} levels={levels} playerMode={playerMode} xp={xp} />}
       {tab === "quests" && <Quests_ quests={quests} onToggle={toggleQuest} />}
+      {/* "Where should I walk next?" — the one question the map always answers.
+          Hidden while an arrival card is up so the two never stack. */}
+      {tab === "map" && nextDiscovery && !arrival && !worldBuilderActive && (
+        <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 150, zIndex: 45,
+          background: "#1a1420ee", border: "1px solid #D9A44166", borderRadius: 22, padding: "8px 16px",
+          color: "#f0dcae", fontFamily: body, fontSize: 13, display: "flex", gap: 8, alignItems: "center",
+          boxShadow: "0 4px 14px #0008", whiteSpace: "nowrap", maxWidth: "88%", overflow: "hidden" }}>
+          <span>🧭</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+            <b>{nextDiscovery.node.name}</b>
+            {" · "}{nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
+          </span>
+        </div>
+      )}
+      {/* ARRIVAL IS THE PAYOFF — the card that guarantees "you arrived and
+          something happened." XP, collection progress, and the next pull. */}
+      {arrival && (
+        <div onClick={() => setArrival(null)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "#00000088",
+          display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480,
+            background: "linear-gradient(180deg,#241a2e,#171020)", borderRadius: "22px 22px 0 0",
+            padding: "22px 20px 30px", color: "#fff", fontFamily: body, borderTop: "2px solid #D9A441" }}>
+            <div style={{ fontSize: 36, textAlign: "center" }}>{(CATEGORY_MARKER_STYLE[arrival.category] || {}).emoji || "📍"}</div>
+            <div style={{ textAlign: "center", fontSize: 12, letterSpacing: 2, color: "#D9A441", marginTop: 6, fontWeight: 700 }}>
+              {arrival.first ? "NEW DISCOVERY" : "WELCOME BACK"}
+            </div>
+            <div style={{ textAlign: "center", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{arrival.name}</div>
+            {arrival.story && (
+              <div style={{ fontSize: 13, color: "#cbbfd6", marginTop: 10, textAlign: "center", lineHeight: 1.5 }}>{arrival.story}</div>
+            )}
+            <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 14, fontSize: 13 }}>
+              <span style={{ color: "#5BD9B0", fontWeight: 700 }}>+{arrival.xpGained} XP</span>
+              <span style={{ color: "#cbbfd6" }}>{heroStats.discovered}/{heroStats.total} places discovered</span>
+            </div>
+            {nextDiscovery && (
+              <div style={{ textAlign: "center", marginTop: 12, fontSize: 13, color: "#f0dcae" }}>
+                Next: <b>{nextDiscovery.node.name}</b> · {nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
+              </div>
+            )}
+            <button onClick={() => setArrival(null)} style={{ marginTop: 16, width: "100%", padding: "13px 0",
+              borderRadius: 14, border: "none", background: "#D9A441", color: "#1a1420", fontWeight: 700, fontSize: 15 }}>
+              Keep exploring
+            </button>
+          </div>
+        </div>
+      )}
       {tab === "map" && (
         // Full viewport, edge to edge — the map is the primary interface now, not
         // content sitting inside the usual padded screen area. The bottom nav still
@@ -1734,8 +1840,18 @@ function applyArtDistrictTheme(map, night) {
         }
       }
       else if (layer.type === "symbol") {
-        map.setPaintProperty(layer.id, "text-color", p.label);
-        map.setPaintProperty(layer.id, "text-halo-color", p.halo);
+        // "Generic buildings: no labels." The basemap ships every shop, transit
+        // stop, parking lot, one-way arrow, and highway shield as map clutter —
+        // that's GIS-viewer energy, not game world. Hide all of it. Street
+        // names stay (players navigate by them, and the concept art keeps
+        // them), and so do city/water names for orientation when zoomed out.
+        // Hero locations get their labels from our own markers, not the basemap.
+        if (/^(poi_|airport|road_one_way|highway-shield|road_shield|label_other)/.test(layer.id)) {
+          map.setLayoutProperty(layer.id, "visibility", "none");
+        } else {
+          map.setPaintProperty(layer.id, "text-color", p.label);
+          map.setPaintProperty(layer.id, "text-halo-color", p.halo);
+        }
       }
     } catch { /* this layer doesn't support this paint property — skip it, don't break the rest */ }
   });
@@ -2073,9 +2189,11 @@ function createBuildingModelsLayer() {
               }
             });
             // Pure rotation, positive scale: local Y-up → scene Z-up with
-            // nothing mirrored (mirrored scale flips winding/normals).
+            // nothing mirrored (mirrored scale flips winding/normals). The Y
+            // component runs 1.2× — "slightly taller proportions" from the
+            // design doc, so heroes stretch upward without getting bulkier.
             model.rotation.x = Math.PI / 2;
-            model.scale.set(REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION);
+            model.scale.set(REAL_WORLD_SIZE_CORRECTION, REAL_WORLD_SIZE_CORRECTION * 1.2, REAL_WORLD_SIZE_CORRECTION);
             container.add(model);
             // Floating collectible above the roof — spins and bobs in the
             // render loop, the classic "there's something here for you" beacon.
@@ -2203,20 +2321,36 @@ function startBuildingPulse(map) {
 }
 
 /**
- * Subtle atmospheric depth-fade so distant buildings soften into the background
- * instead of the whole city looking uniformly sharp — a real MapLibre fog/sky
- * feature (available in recent versions), not a hand-rolled effect. Defensive: if
- * this MapLibre version or the loaded style doesn't support it, it fails silently
- * rather than breaking the map.
+ * Real sky + atmospheric horizon, via MapLibre's native sky API. Two root
+ * causes are fixed versus the previous "sky doesn't render on device" attempts:
+ *
+ * 1. The old code called map.setFog(...) — that is a MAPBOX API that simply
+ *    does not exist in MapLibre; it threw on every call and the catch block
+ *    silently swallowed it. Fog never applied even once.
+ * 2. MapLibre's sky spec has an "atmosphere-blend" property whose DEFAULT
+ *    fades the entire sky to invisible by roughly zoom 12 — the earlier
+ *    native-sky attempts very likely worked, but were tested at street-level
+ *    gameplay zoom where the default had already faded them to nothing.
+ *    Pinning atmosphere-blend to 1 keeps the sky visible at every zoom.
+ *
+ * Colors come from SKY_PALETTE (sampled from the real Kenney skybox PNGs), so
+ * morning/day/night each get their own zenith and horizon bands, and the fog
+ * band at the horizon line matches the ground palette for a soft distance fade.
  */
 function applyAtmosphere(map, night) {
   try {
-    map.setFog({
-      range: [0.3, 3.5],
-      color: night ? "rgba(27,58,92,0.9)" : "rgba(110,181,232,0.85)",
-      "horizon-blend": 0.2,
+    const tod = getTimeOfDay();
+    const sky = SKY_PALETTE[tod] || SKY_PALETTE.day;
+    map.setSky({
+      "sky-color": sky.zenith,
+      "horizon-color": sky.horizon,
+      "fog-color": night ? "#1B3A5C" : "#CFC5AC",
+      "sky-horizon-blend": 0.6,
+      "horizon-fog-blend": 0.5,
+      "fog-ground-blend": 0.35,
+      "atmosphere-blend": 1,
     });
-  } catch { /* fog/sky not supported by this MapLibre version or style — the map still works without it */ }
+  } catch { /* sky not supported by this MapLibre build — the map still works without it */ }
 }
 
 /**
@@ -2241,14 +2375,10 @@ function getTimeOfDay() {
 }
 
 /**
- * Two native MapLibre sky attempts (setSky(), then a real "sky" style layer)
- * both failed to render on a real device. A third attempt — making the
- * background layer transparent so a CSS gradient could show through — was also
- * reverted: it removed ground coverage entirely, not just the empty-sky region,
- * turning the whole visible ground blue. The background stays opaque (the real
- * Art District ground color) until there's an actual, verified way to
- * distinguish "empty sky above the horizon" from "the ground plane" — sky
- * remains unsolved rather than broken in a new way each attempt.
+ * (History: two native MapLibre sky attempts and a CSS-gradient attempt all
+ * failed here before. Root cause finally identified — see applyAtmosphere:
+ * setFog() doesn't exist in MapLibre, and the sky spec's default
+ * atmosphere-blend fades the sky out entirely at gameplay zoom.)
  */
 
 /* ---------------- custom category markers — designed shapes, not generic pins ---------------- */
@@ -2261,6 +2391,22 @@ const MARKER_ANIMATIONS = `
   @keyframes avatarIdleSway { 0%,100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
   @keyframes cubeSpin { 0% { transform: rotate(45deg) rotateY(0deg); } 100% { transform: rotate(45deg) rotateY(360deg); } }
 `;
+/* ---------------- Arrival loop constants: what counts as a hero, what arrival pays ---------------- */
+const HERO_ARRIVAL = {
+  radiusMeters: 25, // physically at the building, with GPS-drift grace
+  revisitCooldownMs: 20 * 60 * 60 * 1000, // one rewarded return per ~day, so standing at home can't farm
+  xpAction: { gallery: "visit_gallery", museum: "visit_gallery", public_art: "discover_public_art", venue: "check_in" },
+  archiveType: { gallery: "gallery_visit", museum: "gallery_visit", public_art: "public_art", venue: "check_in" },
+};
+/** A hero node = a real place whose category carries a GLB building — the same
+ *  definition the map uses for hero visuals, so gameplay and rendering can
+ *  never disagree about what's important. */
+function isHeroNode(n) {
+  if (!n || typeof n.lat !== "number" || typeof n.lng !== "number") return false;
+  const cat = getMarkerCategory(n);
+  return !!(cat && CATEGORY_MARKER_STYLE[cat] && CATEGORY_MARKER_STYLE[cat].buildingModel);
+}
+
 const CATEGORY_MARKER_STYLE = {
   gallery: { glow: "#D9A441", emoji: "🖼️", buildingModel: "building-a" },
   museum: { glow: "#5B8FD9", emoji: "🏛️", buildingModel: "building-b" },
@@ -2580,7 +2726,12 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         if (n !== prevNight && mapRef.current) { applyArtDistrictTheme(mapRef.current, n); applyAtmosphere(mapRef.current, n); }
         return n;
       });
-      setTimeOfDay(t);
+      setTimeOfDay(prev => {
+        // Morning→day crosses no night boundary, but the sky palette still
+        // changes — reapply the sky whenever the time-of-day window shifts.
+        if (t !== prev && mapRef.current) applyAtmosphere(mapRef.current, n);
+        return t;
+      });
     }, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, []);
