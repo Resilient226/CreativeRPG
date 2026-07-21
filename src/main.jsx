@@ -60,3 +60,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     </ErrorBoundary>
   </React.StrictMode>
 );
+
+// PWA install support. Registered only in production, after the page has
+// finished loading, so it can never slow down or interfere with local dev.
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {
+      // Install/gameplay still work perfectly with no service worker — this
+      // only means no offline shell / no cached-asset speed boost this visit.
+    });
+  });
+}
