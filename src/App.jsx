@@ -2206,9 +2206,37 @@ function createBuildingModelsLayer() {
         d.entities.forEach(e => {
           const category = getMarkerCategory(e);
           const style = CATEGORY_MARKER_STYLE[category];
-          if (!style || !style.buildingModel) return;
+          if (!style) return; // e.g. "idea" — genuinely never gets a world marker
           seenIds.add(e.id);
           if (placed.has(e.id)) return; // already positioned — entities don't move
+
+          // EVERY entity gets a real 3D beam now, not just ones with a
+          // building. The flat HTML/CSS beam (still used for these categories
+          // until now) is the same 2D-on-3D mismatch that caused every
+          // "floats when I'm far away" report — it looked fine close up and
+          // detached at distance, no matter how it was tuned, because it
+          // isn't real geometry. This container-only path handles that: a
+          // genuine cylinder, welded to the entity's true ground point,
+          // guaranteed to project correctly at any distance since it's real
+          // 3D content, exactly like the fix that solved this for hero
+          // buildings. No building/gem/light here — those stay exclusive to
+          // true hero categories, added below via placeAt.
+          if (!style.buildingModel) {
+            const local = this.toLocalMeters(e.lng, e.lat);
+            const container = new THREE.Group();
+            container.position.set(local.x, local.y, 0);
+            const color = new THREE.Color(style.glow || "#D9A441");
+            const beam = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.25, 0.4, 45, 8, 1, true),
+              new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false })
+            );
+            beam.position.set(0, 0, 22.5); // half the 45-tall cylinder — base lands exactly at the entity's ground point
+            container.add(beam);
+            container.userData.beam = beam;
+            this.scene.add(container);
+            placed.set(e.id, container);
+            return; // no building to load — nothing further to do for this entity
+          }
 
           const placeAt = (templateScene) => {
             // Meter-space placement relative to the layer's local origin — no
@@ -2542,23 +2570,14 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
           boxShadow: `0 0 10px 2px ${style.glow}cc` }} />
       )}
       {label && <div style={{ background: "#000000b0", borderRadius: 5, padding: "1px 6px", fontFamily: head, fontSize: 8, color: "#fff", maxWidth: 76, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>}
-      {/* Hero locations (real buildingModel) get their beacon from a genuine
-          3D cylinder anchored to the building in the Three.js scene — see
-          createBuildingModelsLayer. That beam can never float/lift, because
-          it's actual geometry welded to the building's own ground point, not
-          a flat CSS overlay approximating one. Rendering BOTH here would be a
-          redundant, buggy duplicate of a problem that's already solved
-          correctly elsewhere, so hero entities render neither beam nor ring
-          here — only non-hero categories still use this lightweight 2D pin. */}
-      {!style.buildingModel && (
-        <>
-          <div data-role="beam" style={{ width: 3, height: beamHeight, marginTop: 2, transformOrigin: "bottom center",
-            background: `linear-gradient(180deg, ${style.glow}00, ${style.glow}dd 70%, ${style.glow}ff)`,
-            boxShadow: `0 0 6px 1px ${style.glow}aa`, animation: "beamFlicker 2.4s ease-in-out infinite" }} />
-          <div data-role="ring" style={{ width: 20, height: 7, borderRadius: "50%", background: `${style.glow}55`,
-            boxShadow: `0 0 10px 3px ${style.glow}66`, marginTop: -2 }} />
-        </>
-      )}
+      {/* No beam/ring rendered here for ANY category anymore. Every entity —
+          hero or not — now gets a genuine 3D beam in the Three.js scene (see
+          createBuildingModelsLayer/updateEntities), welded to its true ground
+          point. The flat HTML/CSS version that used to live here is exactly
+          what caused every "looks grounded up close, floats when I'm far
+          away" report: a 2D approximation of 3D content can never fully hold
+          up as distance and camera angle change, no matter how it's tuned.
+          Real geometry doesn't have that problem, so it fully replaces this. */}
     </button>
   );
 }
@@ -2992,44 +3011,29 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
    * reserved zone; a marker with no visible base is worse than no marker.
    */
   const HUD_SAFE_TOP_PX = 210; // covers the status bar + top buttons + Daily Quest card, in CSS px
-  const beamFadeThrottleRef = useRef(0);
+  const hudHideThrottleRef = useRef(0);
   useEffect(() => {
+    // With the real 3D beam now handling every entity's "there's something
+    // over there" signal, this HTML marker only carries the label + cube icon
+    // — no beam, no ring, nothing distance-sensitive left to fade or grow.
+    // The one thing still worth doing here: hide the marker (label/icon)
+    // entirely when its ground point projects underneath the fixed HUD (the
+    // Daily Quest card + top buttons), since a label peeking out from behind
+    // opaque UI looks just as broken as a beam did.
     if (!playerPosition) return;
     const map = mapRef.current;
     if (!map) return;
     const now = Date.now();
-    if (now - beamFadeThrottleRef.current < 1200) return;
-    beamFadeThrottleRef.current = now;
-    const LINE_GONE_BY_M = 220; // past this, ground-under-marker is too compressed/hazy for a thin line to read as grounded
+    if (now - hudHideThrottleRef.current < 1200) return;
+    hudHideThrottleRef.current = now;
     markersRef.current.forEach(m => {
-      if (m.isDistrictDot || typeof m.lat !== "number") return; // district dots have no beam to fade
+      if (m.isDistrictDot || typeof m.lat !== "number") return;
       let hiddenByHud = false;
       try {
         const p = map.project([m.lng, m.lat]);
         hiddenByHud = !p || !isFinite(p.x) || !isFinite(p.y) || p.y < HUD_SAFE_TOP_PX;
       } catch { /* projection can throw briefly during camera transitions — treat as visible that tick */ }
       m.el.style.display = hiddenByHud ? "none" : "";
-      if (hiddenByHud) return; // nothing further to style on a hidden marker
-      const meters = haversineDistanceKm(playerPosition.lat, playerPosition.lng, m.lat, m.lng) * 1000;
-      const lineVisibility = Math.max(0, Math.min(1, 1 - meters / LINE_GONE_BY_M));
-      const beam = m.el.querySelector('[data-role="beam"]');
-      if (beam) { beam.style.opacity = lineVisibility; beam.style.transform = `scaleY(${0.5 + 0.5 * lineVisibility})`; }
-      // The "lifting off the ground" report: the ring's anchor point is always
-      // exactly correct — it never actually drifts. What changes is how much
-      // visible GROUND surrounds it. At this low pitch, the ground between the
-      // player and the horizon compresses into a thinner sliver every meter of
-      // distance, and past a point that sliver is thinner than the ring
-      // itself — so the ring pokes above it into open sky, reading as
-      // "floating." Per feedback, the fix isn't to shrink the ring (that's
-      // the beacon they want to keep) — it's to GROW its footprint with
-      // distance, so it always overlaps enough of whatever ground sliver is
-      // there to still read as grounded, no matter how compressed that
-      // sliver gets. Grows gradually up to 2.2x by ~350m+; brightness/opacity
-      // untouched, matching "don't fade the beacon."
-      const ringGrow = 1 + Math.min(1.2, meters / 300);
-      const ring = m.el.querySelector('[data-role="ring"]');
-      if (ring) { ring.style.transform = `scale(${ringGrow})`; }
-      // ring opacity/glow color: deliberately untouched — full beacon strength at every distance.
     });
   }, [playerPosition]);
 
