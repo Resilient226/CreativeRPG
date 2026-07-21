@@ -15,7 +15,7 @@ import { buildUpcomingDeadlines, isUrgentDeadline, consolidateByTitle, filterDea
 import { computeFinanceTotals, buildFinanceEntry, applyIncomeToGoal, removeIncomeFromGoal } from "./engines/economyEngine";
 import { runCareerDirector } from "./engines/careerDirector";
 import { driftNpcOverTime, generatePublicProfile } from "./engines/npcEngine";
-import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation, ACHIEVEMENTS, XP_ACTIONS, buildArchiveEntry } from "./engines/artistProfileEngine";
+import { awardXp, computeProfileLevel, checkNewAchievements, currentBadge, summarizeParticipation, ACHIEVEMENTS, XP_ACTIONS, buildArchiveEntry, DAILY_DISCOVERY_TARGET, countTodayDiscoveries, advanceStreak, localDateKey } from "./engines/artistProfileEngine";
 import { buildCreativeDrop, getRevealedDrops } from "./engines/collectiblesEngine";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -339,6 +339,8 @@ export default function CreativeEmpireOS() {
   // (entityId -> { ts, name, category }), and the arrival card currently showing.
   const [checkIns, setCheckIns] = useState({});
   const [arrival, setArrival] = useState(null);
+  // Streak state for the daily discovery objective: { count, claimedDate, best }
+  const [streak, setStreak] = useState({ count: 0, claimedDate: null, best: 0 });
   const [drops, setDrops] = useState([]);
   const [lastLocationFetch, setLastLocationFetch] = useState(0);
   const [aiNpcMode, setAiNpcMode] = useState(false);
@@ -428,6 +430,7 @@ export default function CreativeEmpireOS() {
         if (save.archive) setArchive(save.archive);
         if (save.discoveredLocations) setDiscoveredLocations(save.discoveredLocations);
         if (save.checkIns) setCheckIns(save.checkIns);
+        if (save.streak) setStreak(save.streak);
         if (save.drops) setDrops(save.drops);
         if (typeof save.lastLocationFetch === "number") setLastLocationFetch(save.lastLocationFetch);
         // Lazy catch-up for practice partners: drift their career state by however
@@ -552,9 +555,9 @@ export default function CreativeEmpireOS() {
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, lastLocationFetch, drops, lastSeen: Date.now() })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, streak, lastLocationFetch, drops, lastSeen: Date.now() })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, lastLocationFetch, drops]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, streak, lastLocationFetch, drops]);
 
   // Career Director: reads across the other engines and decides what the Command
   // Board should show — re-scoring existing quests and proposing new ones from real
@@ -948,6 +951,21 @@ export default function CreativeEmpireOS() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkIns, discoveredLocations, places]);
 
+  // Today's progress toward the daily objective — "Visit 3 Galleries, 1/3"
+  // from the concept art. Re-derived from checkIns, never stored separately,
+  // so it can't drift out of sync with what actually happened.
+  const todayDiscoveries = useMemo(() => countTodayDiscoveries(checkIns), [checkIns]);
+  useEffect(() => {
+    if (todayDiscoveries < DAILY_DISCOVERY_TARGET) return;
+    const now = Date.now();
+    if (streak.claimedDate === localDateKey(now)) return; // already claimed today
+    const nextCount = streak.claimedDate === localDateKey(now - 86400000) ? streak.count + 1 : 1;
+    setStreak(s => advanceStreak(s, now));
+    setXp(x => x + 25);
+    flash(`🔥 Daily objective complete — ${nextCount}-day streak! +25 XP`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayDiscoveries]);
+
   // Auth gate comes first: nothing about the game or onboarding matters until we
   // know who (if anyone) is actually signed in.
   if (authUser === undefined) {
@@ -1015,6 +1033,36 @@ export default function CreativeEmpireOS() {
       {tab === "quests" && <Quests_ quests={quests} onToggle={toggleQuest} />}
       {/* "Where should I walk next?" — the one question the map always answers.
           Hidden while an arrival card is up so the two never stack. */}
+      {/* Daily discovery objective — "Visit 3 Galleries · 1/3" from the concept
+          art, positioned top-center between the home/profile corner buttons.
+          Streak flame shows once you've built one; the bar itself is always
+          visible so there's always a reason to walk somewhere today. */}
+      {tab === "map" && !worldBuilderActive && !arrival && (
+        <div style={{ position: "fixed", top: "calc(14px + env(safe-area-inset-top, 0px))", left: "50%",
+          transform: "translateX(-50%)", zIndex: 45, background: "#1a1420ee", border: "1px solid #D9A44155",
+          borderRadius: 16, padding: "8px 14px", minWidth: 190, backdropFilter: "blur(8px)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span style={{ fontFamily: body, fontSize: 10, letterSpacing: 1, color: "#D9A441", fontWeight: 700 }}>
+              DAILY QUEST
+            </span>
+            {streak.count > 0 && (
+              <span style={{ fontFamily: body, fontSize: 11, color: "#f0dcae" }}>🔥 {streak.count}</span>
+            )}
+          </div>
+          <div style={{ fontFamily: body, fontSize: 12, color: "#fff", marginTop: 2 }}>
+            Discover {DAILY_DISCOVERY_TARGET} places
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
+            <div style={{ flex: 1, height: 5, borderRadius: 3, background: "#ffffff22", overflow: "hidden" }}>
+              <div style={{ width: `${Math.min(100, (todayDiscoveries / DAILY_DISCOVERY_TARGET) * 100)}%`, height: "100%",
+                background: todayDiscoveries >= DAILY_DISCOVERY_TARGET ? "#5BD9B0" : "#D9A441", transition: "width 0.4s ease" }} />
+            </div>
+            <span style={{ fontFamily: body, fontSize: 11, color: "#cbbfd6" }}>
+              {Math.min(todayDiscoveries, DAILY_DISCOVERY_TARGET)}/{DAILY_DISCOVERY_TARGET}
+            </span>
+          </div>
+        </div>
+      )}
       {tab === "map" && nextDiscovery && !arrival && !worldBuilderActive && (
         <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 150, zIndex: 45,
           background: "#1a1420ee", border: "1px solid #D9A44166", borderRadius: 22, padding: "8px 16px",
