@@ -2177,8 +2177,10 @@ function createBuildingModelsLayer() {
         if (gem) {
           gem.rotation.z += dt * 1.4;
           gem.position.z = gem.userData.baseZ + Math.sin(this._heroT * 1.9 + gi * 1.3) * 0.7;
-          gi++;
         }
+        const beam = obj.userData && obj.userData.beam;
+        if (beam) beam.material.opacity = 0.42 + Math.sin(this._heroT * 2.4 + gi * 1.3) * 0.13;
+        gi++;
       }
       this.renderer.resetState();
       this.renderer.render(this.scene, this.camera);
@@ -2253,6 +2255,26 @@ function createBuildingModelsLayer() {
             gem.userData.baseZ = 16;
             container.add(gem);
             container.userData.gem = gem;
+            // THE BEACON, done correctly this time: a real 3D cylinder, not an
+            // HTML/CSS overlay. Every "the beam floats / lifts off the ground
+            // as I walk away" report traced back to the same root cause: a flat
+            // 2D DOM element pasted on top of a true 3D perspective scene can
+            // never fully track camera distance/angle the way real geometry
+            // does — which is exactly why the building and gem right next to
+            // it never had this problem. This beam is anchored in the SAME
+            // container, at the SAME local-meter coordinate, so it is
+            // physically part of the building's own transform: its base is
+            // geometrically welded to the building's ground point at every
+            // distance and every camera angle, by construction, not by
+            // approximation. Tall enough to spot over neighboring rooftops —
+            // preserves the "beacon so I know there's more elsewhere" role.
+            const beam = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.35, 0.55, 70, 8, 1, true),
+              new THREE.MeshBasicMaterial({ color: 0xffc169, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false })
+            );
+            beam.position.set(0, 0, 35); // half of the 70-tall cylinder, so its BASE sits exactly at the building's ground point (z=0)
+            container.add(beam);
+            container.userData.beam = beam;
             // Warm accent light on the facade. Capped so a dense district can't
             // stack up dozens of live point lights and tank the frame rate.
             if (placed.size < 8) {
@@ -2464,7 +2486,16 @@ const CATEGORY_MARKER_STYLE = {
   collectible: { glow: "#5BD9B0", emoji: "✨" },
   person: { glow: "#5BD9E8", emoji: "🧑" },
   opportunity: { glow: "#D9A441", emoji: "🎯" },
-  place: { glow: "#D9A441", emoji: "📍", buildingModel: "building-e" }, // generic default — nothing falls through beam-less anymore
+  // "place" is the CATCH-ALL for any real entity that isn't one of the four
+  // true hero categories above — it exists so nothing renders totally
+  // unstyled, NOT to grant hero status. It previously carried a buildingModel,
+  // which meant every generic/default location silently got a full 3D hero
+  // building, glow, gem, and even hero-category arrival XP — exactly what the
+  // design doc's "generic buildings: no glow, no labels" rule forbids. It gets
+  // a lightweight beam+pin for wayfinding only; isHeroNode() reads this same
+  // buildingModel field, so this one change also correctly excludes generic
+  // places from hero XP/streak counting.
+  place: { glow: "#D9A441", emoji: "📍", buildingModel: null },
 };
 function CustomCategoryMarker({ category, onClick, label, selected = false }) {
   const style = CATEGORY_MARKER_STYLE[category] || CATEGORY_MARKER_STYLE.gallery;
@@ -2495,11 +2526,23 @@ function CustomCategoryMarker({ category, onClick, label, selected = false }) {
           boxShadow: `0 0 10px 2px ${style.glow}cc` }} />
       )}
       {label && <div style={{ background: "#000000b0", borderRadius: 5, padding: "1px 6px", fontFamily: head, fontSize: 8, color: "#fff", maxWidth: 76, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>}
-      <div style={{ width: 3, height: beamHeight, marginTop: 2,
-        background: `linear-gradient(180deg, ${style.glow}00, ${style.glow}dd 70%, ${style.glow}ff)`,
-        boxShadow: `0 0 6px 1px ${style.glow}aa`, animation: "beamFlicker 2.4s ease-in-out infinite" }} />
-      <div style={{ width: 20, height: 7, borderRadius: "50%", background: `${style.glow}55`,
-        boxShadow: `0 0 10px 3px ${style.glow}66`, marginTop: -2 }} />
+      {/* Hero locations (real buildingModel) get their beacon from a genuine
+          3D cylinder anchored to the building in the Three.js scene — see
+          createBuildingModelsLayer. That beam can never float/lift, because
+          it's actual geometry welded to the building's own ground point, not
+          a flat CSS overlay approximating one. Rendering BOTH here would be a
+          redundant, buggy duplicate of a problem that's already solved
+          correctly elsewhere, so hero entities render neither beam nor ring
+          here — only non-hero categories still use this lightweight 2D pin. */}
+      {!style.buildingModel && (
+        <>
+          <div data-role="beam" style={{ width: 3, height: beamHeight, marginTop: 2, transformOrigin: "bottom center",
+            background: `linear-gradient(180deg, ${style.glow}00, ${style.glow}dd 70%, ${style.glow}ff)`,
+            boxShadow: `0 0 6px 1px ${style.glow}aa`, animation: "beamFlicker 2.4s ease-in-out infinite" }} />
+          <div data-role="ring" style={{ width: 20, height: 7, borderRadius: "50%", background: `${style.glow}55`,
+            boxShadow: `0 0 10px 3px ${style.glow}66`, marginTop: -2 }} />
+        </>
+      )}
     </button>
   );
 }
@@ -2907,11 +2950,72 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
           root.render(<EntityPin entity={e} onClick={() => enterEntity(e)} />);
         }
         const marker = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat([e.lng, e.lat]).addTo(map);
-        markersRef.current.push({ marker, root });
+        markersRef.current.push({ marker, root, el, lat: e.lat, lng: e.lng, isDistrictDot: tier === "district" });
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [districts, tier, mapReady, interior]);
+
+  /**
+   * Distance-based beam-LINE fade — NOT a fade of the beacon itself. The
+   * glow/ring stays full strength at any distance on purpose: it's a
+   * beacon telling the player "there's more over there," per direct
+   * feedback, and shrinking it away defeats that. This part fades only the
+   * thin connecting line with distance; the ring/glow itself is untouched.
+   *
+   * SEPARATELY, and this turned out to be the actual cause of the reported
+   * "floating in the sky" beam: a marker whose ground point projects to a
+   * screen position UNDER the fixed HUD (the Daily Quest card + top status
+   * bar/buttons) has its base — the ring, the very thing that reads as
+   * "grounded" — physically hidden behind opaque UI. Only a stray segment of
+   * beam peeks out above/beside the card, with nothing visible tying it to
+   * the ground, which is exactly the floating look in the screenshots (it
+   * consistently traces back to the HUD's fixed position, not to distance).
+   * This computes each marker's real screen position every tick and hides
+   * the WHOLE marker — not just fades the line — whenever it falls in that
+   * reserved zone; a marker with no visible base is worse than no marker.
+   */
+  const HUD_SAFE_TOP_PX = 210; // covers the status bar + top buttons + Daily Quest card, in CSS px
+  const beamFadeThrottleRef = useRef(0);
+  useEffect(() => {
+    if (!playerPosition) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const now = Date.now();
+    if (now - beamFadeThrottleRef.current < 1200) return;
+    beamFadeThrottleRef.current = now;
+    const LINE_GONE_BY_M = 220; // past this, ground-under-marker is too compressed/hazy for a thin line to read as grounded
+    markersRef.current.forEach(m => {
+      if (m.isDistrictDot || typeof m.lat !== "number") return; // district dots have no beam to fade
+      let hiddenByHud = false;
+      try {
+        const p = map.project([m.lng, m.lat]);
+        hiddenByHud = !p || !isFinite(p.x) || !isFinite(p.y) || p.y < HUD_SAFE_TOP_PX;
+      } catch { /* projection can throw briefly during camera transitions — treat as visible that tick */ }
+      m.el.style.display = hiddenByHud ? "none" : "";
+      if (hiddenByHud) return; // nothing further to style on a hidden marker
+      const meters = haversineDistanceKm(playerPosition.lat, playerPosition.lng, m.lat, m.lng) * 1000;
+      const lineVisibility = Math.max(0, Math.min(1, 1 - meters / LINE_GONE_BY_M));
+      const beam = m.el.querySelector('[data-role="beam"]');
+      if (beam) { beam.style.opacity = lineVisibility; beam.style.transform = `scaleY(${0.5 + 0.5 * lineVisibility})`; }
+      // The "lifting off the ground" report: the ring's anchor point is always
+      // exactly correct — it never actually drifts. What changes is how much
+      // visible GROUND surrounds it. At this low pitch, the ground between the
+      // player and the horizon compresses into a thinner sliver every meter of
+      // distance, and past a point that sliver is thinner than the ring
+      // itself — so the ring pokes above it into open sky, reading as
+      // "floating." Per feedback, the fix isn't to shrink the ring (that's
+      // the beacon they want to keep) — it's to GROW its footprint with
+      // distance, so it always overlaps enough of whatever ground sliver is
+      // there to still read as grounded, no matter how compressed that
+      // sliver gets. Grows gradually up to 2.2x by ~350m+; brightness/opacity
+      // untouched, matching "don't fade the beacon."
+      const ringGrow = 1 + Math.min(1.2, meters / 300);
+      const ring = m.el.querySelector('[data-role="ring"]');
+      if (ring) { ring.style.transform = `scale(${ringGrow})`; }
+      // ring opacity/glow color: deliberately untouched — full beacon strength at every distance.
+    });
+  }, [playerPosition]);
 
   return (
     <div style={{ position: "relative", height: "100%", width: "100%",
