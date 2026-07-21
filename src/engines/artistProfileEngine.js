@@ -100,7 +100,36 @@ export function currentBadge(level) {
   return [...BADGE_TIERS].reverse().find(b => level >= b.minLevel) || BADGE_TIERS[0];
 }
 
-/* ---------------- Check-ins: proximity-verified, not just self-reported ---------------- */
+/* ---------------- Daily Discovery Quest + Streak: "a reason to come back" ---------------- */
+export const DAILY_DISCOVERY_TARGET = 3;
+
+/** YYYY-MM-DD in the player's local timezone — the boundary a "day" means for
+ *  streaks and the daily objective. */
+export function localDateKey(ts = Date.now()) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** How many hero check-ins (from the arrival loop's checkIns record) happened
+ *  today. Pure given a fixed nowTs, so it's testable without mocking Date. */
+export function countTodayDiscoveries(checkIns, nowTs = Date.now()) {
+  const today = localDateKey(nowTs);
+  return Object.values(checkIns || {}).filter(c => localDateKey(c.ts) === today).length;
+}
+
+/**
+ * Pure streak transition: given the streak's current state, returns the next
+ * state for "today's objective just completed." Consecutive calendar days
+ * extend the streak; a gap resets it to 1; calling this again the same day
+ * is a no-op (claimedDate guards against double-counting one day twice).
+ */
+export function advanceStreak(streak, nowTs = Date.now()) {
+  const today = localDateKey(nowTs);
+  if (streak.claimedDate === today) return streak;
+  const yesterday = localDateKey(nowTs - 86400000);
+  const count = streak.claimedDate === yesterday ? streak.count + 1 : 1;
+  return { count, claimedDate: today, best: Math.max(count, streak.best || 0) };
+}
 import { haversineDistanceKm } from "./geoEngine";
 
 /**
