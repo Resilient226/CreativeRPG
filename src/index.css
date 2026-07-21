@@ -1,3 +1,25 @@
-* { box-sizing: border-box; }
-html, body, #root { margin: 0; height: 100%; }
-body { background: #0B0D12; }
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Creative Empire OS</title>
+    <!-- PWA: makes "Add to Home Screen" launch as a real standalone app
+         (own icon, no Safari chrome) instead of just bookmarking the tab. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1B140D" />
+    <link rel="icon" href="/icon-192.png" />
+    <!-- iOS specifically ignores the web manifest for home-screen install and
+         needs these tags directly — this is the standard trio that makes Add
+         to Home Screen behave like a real app on iPhone. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="CreativeRPG" />
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
