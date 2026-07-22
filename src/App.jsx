@@ -5,6 +5,12 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { storageGet, storageSet } from "./lib/storage";
 import { onAuthChange, signUpEmail, signInEmail, signInGoogle, signOutUser, authErrorMessage } from "./lib/firebase";
 import { callModel, allText, extractJson } from "./lib/model";
+import {
+  makeArtistNode, makeArtworkNode, makeStoryNode, makeTourNode, makeEdge,
+  approveItem, rejectItem, editField, regeneratableFields,
+  computeArtistProgress, computeNeighborhoodProgress, computeTourProgress, nearbyPlaceIds,
+  buildResearchPrompt, suggestionsToGraphDelta, mergeGraphDelta, pendingByPlace,
+} from "./engines/knowledgeGraphEngine";
 import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
 import { applyInteraction, groupPeopleBy, clampStat, normalizeTrainingNpc } from "./engines/relationshipEngine";
@@ -341,6 +347,21 @@ export default function CreativeEmpireOS() {
   const [arrival, setArrival] = useState(null);
   // Streak state for the daily discovery objective: { count, claimedDate, best }
   const [streak, setStreak] = useState({ count: 0, claimedDate: null, best: 0 });
+  // The Knowledge Graph: artists/artworks/stories/tours + their edges. Places
+  // themselves stay wherever they already lived (World Builder's places
+  // list) — the graph only adds relationships ON TOP of what already exists,
+  // it never duplicates the place data itself.
+  const [graph, setGraph] = useState({ artists: {}, artworks: {}, stories: {}, tours: {}, edges: {} });
+  // Which specific artist/artwork/story nodes the player has personally
+  // unlocked — separate from `checkIns` (which just means "visited the
+  // place"). A place can hold several discoverables; checking in doesn't
+  // automatically unlock all of them, though the arrival card currently
+  // surfaces whichever are attached (see the arrival-loop effect).
+  const [unlockedDiscoverables, setUnlockedDiscoverables] = useState({});
+  // { tourId, legIndex } — which guided tour is active and how far along.
+  // null when Explorer Mode (the app's normal, default state) is active.
+  const [activeTour, setActiveTour] = useState(null);
+  const [researchingPlaceId, setResearchingPlaceId] = useState(null); // in-flight AI research spinner target
   const [drops, setDrops] = useState([]);
   const [lastLocationFetch, setLastLocationFetch] = useState(0);
   const [aiNpcMode, setAiNpcMode] = useState(false);
@@ -431,6 +452,9 @@ export default function CreativeEmpireOS() {
         if (save.discoveredLocations) setDiscoveredLocations(save.discoveredLocations);
         if (save.checkIns) setCheckIns(save.checkIns);
         if (save.streak) setStreak(save.streak);
+        if (save.graph) setGraph(save.graph);
+        if (save.unlockedDiscoverables) setUnlockedDiscoverables(save.unlockedDiscoverables);
+        if (save.activeTour) setActiveTour(save.activeTour);
         if (save.drops) setDrops(save.drops);
         if (typeof save.lastLocationFetch === "number") setLastLocationFetch(save.lastLocationFetch);
         // Lazy catch-up for practice partners: drift their career state by however
@@ -555,9 +579,9 @@ export default function CreativeEmpireOS() {
   // both resolved, so we never overwrite a real save with fresh defaults.
   useEffect(() => {
     if (!loaded || !onboarded) return;
-    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, streak, lastLocationFetch, drops, lastSeen: Date.now() })
+    storageSet(SAVE_KEY, { quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, streak, graph, unlockedDiscoverables, activeTour, lastLocationFetch, drops, lastSeen: Date.now() })
       .catch(() => { /* network hiccup — game still works, just won't persist that change */ });
-  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, streak, lastLocationFetch, drops]);
+  }, [loaded, onboarded, quests, confidence, goal, contacts, places, events, ideas, opps, energy, skills, levels, inventory, financeLog, aiNpcMode, lastOpportunityFetch, xp, unlockedAchievements, archive, discoveredLocations, checkIns, streak, graph, unlockedDiscoverables, activeTour, lastLocationFetch, drops]);
 
   // Career Director: reads across the other engines and decides what the Command
   // Board should show — re-scoring existing quests and proposing new ones from real
@@ -589,6 +613,32 @@ export default function CreativeEmpireOS() {
   }, [loaded, onboarded, levels, events, contacts, confidence, trainingNpc, aiNpcMode, playerMode]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
+
+  /**
+   * Research a real Creative Place with AI, producing PENDING suggestions
+   * only — nothing goes live until approved in the Review Queue. See
+   * knowledgeGraphEngine's buildResearchPrompt for why this is deliberately
+   * conservative: the backend model (Groq/Llama, see api/model.js) has no
+   * live web search wired in, so this can only draw on the model's general
+   * knowledge — real, obscure small venues may come back with an honest
+   * empty result, which is correct behavior, not a bug.
+   */
+  async function researchPlace(place) {
+    setResearchingPlaceId(place.id);
+    try {
+      const { system, user } = buildResearchPrompt(place);
+      const { data } = await callModel({ system, messages: [{ role: "user", content: user }], maxTokens: 900 });
+      const parsed = extractJson(allText(data), "object");
+      const delta = suggestionsToGraphDelta(parsed, place.id);
+      setGraph(g => mergeGraphDelta(g, delta));
+      const n = delta.artists.length + delta.artworks.length + delta.stories.length;
+      flash(n ? `🔮 Found ${n} suggestion${n === 1 ? "" : "s"} for ${place.name} — review in the queue` : `No confident results for ${place.name} — try adding facts manually`);
+    } catch (err) {
+      flash(`Research failed: ${err.message || "unknown error"}`);
+    } finally {
+      setResearchingPlaceId(null);
+    }
+  }
 
   // Called once, at the end of onboarding. Replaces every piece of demo/seed data with
   // something derived from what the player actually told us about their real career.
@@ -926,11 +976,45 @@ export default function CreativeEmpireOS() {
         type: first ? (HERO_ARRIVAL.archiveType[cat] || "check_in") : "check_in",
         title: `${first ? "Discovered" : "Returned to"} ${n.name}`, placeId: n.id, verified: true,
       }), ts: now }, ...(a || [])]);
-      setArrival({ id: n.id, name: n.name, category: cat, xpGained, first, story: n.story || n.description || null });
+      // Graph discoverables attached to this place: verified artworks (via
+      // DISPLAYED_AT) plus whichever artist made each one (via CREATED_BY).
+      // Unlocking here — not just checking in — is what actually advances
+      // artist-collection and neighborhood-artwork progress.
+      const artworkEdges = Object.values(graph.edges).filter(e => e.type === "DISPLAYED_AT" && e.to === n.id && e.status === "verified");
+      const newlyUnlocked = [];
+      artworkEdges.forEach(e => {
+        const art = graph.artworks[e.from];
+        if (art && art.status === "verified" && !unlockedDiscoverables[art.id]) newlyUnlocked.push(art);
+      });
+      if (newlyUnlocked.length) {
+        setUnlockedDiscoverables(u => {
+          const next = { ...u };
+          newlyUnlocked.forEach(art => { next[art.id] = { ts: now, placeId: n.id }; });
+          return next;
+        });
+      }
+      // Tour-mode advancement: if a guided tour is active and this place is
+      // its current (not-yet-visited) stop, move to the next leg. The trail
+      // effect (drawn in the 3D layer) re-targets automatically once
+      // activeTour.legIndex changes.
+      if (activeTour) {
+        const tour = graph.tours[activeTour.tourId];
+        const currentStop = tour && tour.stops[activeTour.legIndex];
+        if (currentStop && currentStop.placeId === n.id) {
+          const isLastStop = activeTour.legIndex === tour.stops.length - 1;
+          setActiveTour(isLastStop ? null : { ...activeTour, legIndex: activeTour.legIndex + 1 });
+          if (isLastStop) flash(`🏅 Tour complete: ${tour.name}!`);
+        }
+      }
+      setArrival({
+        id: n.id, name: n.name, category: cat, xpGained, first,
+        story: n.story || n.description || null,
+        discoverables: newlyUnlocked.map(a => ({ title: a.title, description: a.description })),
+      });
       break; // one arrival at a time — overlapping venues surface on the next pass
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playerPosition, tab]);
+  }, [playerPosition, tab, graph, activeTour]);
 
   // "Where should I walk next?" — nearest hero location not yet discovered.
   const nextDiscovery = useMemo(() => {
@@ -1091,10 +1175,30 @@ export default function CreativeEmpireOS() {
             {arrival.story && (
               <div style={{ fontSize: 13, color: "#cbbfd6", marginTop: 10, textAlign: "center", lineHeight: 1.5 }}>{arrival.story}</div>
             )}
+            {/* A Creative Place can hold several discoverables — surfacing all of
+                them here (not just "you visited a place") is the whole point of
+                the artwork/artist layer: one arrival, several unlocks. */}
+            {arrival.discoverables && arrival.discoverables.length > 0 && (
+              <div style={{ marginTop: 12, background: "#00000033", borderRadius: 12, padding: "10px 12px" }}>
+                <div style={{ fontSize: 10, letterSpacing: 1, color: "#5BD9B0", fontWeight: 700, marginBottom: 6 }}>
+                  {arrival.discoverables.length} DISCOVERY{arrival.discoverables.length === 1 ? "" : "IES"} UNLOCKED
+                </div>
+                {arrival.discoverables.map((d, i) => (
+                  <div key={i} style={{ fontSize: 13, color: "#fff", marginTop: i ? 6 : 0 }}>
+                    <span style={{ color: "#5BD9B0" }}>✦</span> {d.title}
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 14, fontSize: 13 }}>
               <span style={{ color: "#5BD9B0", fontWeight: 700 }}>+{arrival.xpGained} XP</span>
               <span style={{ color: "#cbbfd6" }}>{heroStats.discovered}/{heroStats.total} places discovered</span>
             </div>
+            {activeTour && graph.tours[activeTour.tourId] && (
+              <div style={{ textAlign: "center", marginTop: 10, fontSize: 12, color: "#D9A441" }}>
+                🏛️ {graph.tours[activeTour.tourId].name} — stop {Math.min(activeTour.legIndex + 1, graph.tours[activeTour.tourId].stops.length)}/{graph.tours[activeTour.tourId].stops.length}
+              </div>
+            )}
             {nextDiscovery && (
               <div style={{ textAlign: "center", marginTop: 12, fontSize: 13, color: "#f0dcae" }}>
                 Next: <b>{nextDiscovery.node.name}</b> · {nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
@@ -1117,6 +1221,13 @@ export default function CreativeEmpireOS() {
             onSelect={setSelectedNode} onShowIdeas={() => setShowIdeas(true)} homeBase={homeBase} xp={xp}
             playerPosition={effectivePlayerPosition} avatarModel="robot" onCollectDrop={collectDrop} worldBuilderActive={worldBuilderActive}
             onPublishLocation={publishWorldBuilderLocation} jumpTrigger={jumpTrigger}
+            graph={graph} onResearchPlace={researchPlace} researchingPlaceId={researchingPlaceId}
+            onApproveItem={(kind, id) => setGraph(g => approveItem(g, kind, id))}
+            onRejectItem={(kind, id) => setGraph(g => rejectItem(g, kind, id))}
+            onEditField={(kind, id, field, value) => setGraph(g => editField(g, kind, id, field, value))}
+            activeTour={activeTour}
+            onStartTour={(tourId) => { setActiveTour({ tourId, legIndex: 0 }); flash(`🏛️ Tour started: ${graph.tours[tourId]?.name || ""}`); }}
+            onStopTour={() => setActiveTour(null)}
             onExitWorldBuilder={() => { setWorldBuilderActive(false); setSimulatedPosition(null); flash("Exited World Builder — back to your real position."); }}
             onJumpToAddress={async (address) => {
               const coords = await geocodeAddress(address);
@@ -1584,7 +1695,8 @@ function MiniStep({ icon: Icon, label }) {
 }
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
-function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder, onJumpToAddress, jumpTrigger }) {
+function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder, onJumpToAddress, jumpTrigger,
+  graph = { artists: {}, artworks: {}, stories: {}, tours: {}, edges: {} }, onResearchPlace, researchingPlaceId, onApproveItem, onRejectItem, onEditField, activeTour, onStartTour, onStopTour }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const [showList, setShowList] = useState(false); // minimal UI: the deadlines/level panel is collapsed by default
@@ -1660,7 +1772,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       {/* the map itself — full-screen, edge to edge, the primary interface now */}
-      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} playerPosition={playerPosition} avatarModel={avatarModel} onCollectDrop={onCollectDrop} worldBuilderActive={worldBuilderActive} jumpTrigger={jumpTrigger} />
+      <WorldEngine_ nodes={visible} onSelect={onSelect} onShowIdeas={onShowIdeas} homeBase={homeBase} playerPosition={playerPosition} avatarModel={avatarModel} onCollectDrop={onCollectDrop} worldBuilderActive={worldBuilderActive} jumpTrigger={jumpTrigger} graph={graph} activeTour={activeTour} />
 
       {worldBuilderActive && (
         <>
@@ -1706,6 +1818,26 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
                 {wbBusy ? "Geocoding real address…" : "Publish"}
               </button>
               {wbMsg && <div style={{ fontFamily: body, fontSize: 11, color: "#fff", marginTop: 6 }}>{wbMsg}</div>}
+
+              {/* ---------------- Knowledge Graph: research + review queue + tours ---------------- */}
+              <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#C25BD9", marginTop: 14, marginBottom: 5 }}>🔮 RESEARCH A PLACE</div>
+              {nodes.filter(n => n.kind === "place" && n.adminPlaced).map(p => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0" }}>
+                  <span style={{ fontFamily: body, fontSize: 12, color: "#EDE7D9" }}>{p.name}</span>
+                  <button onClick={() => onResearchPlace && onResearchPlace(p)} disabled={researchingPlaceId === p.id}
+                    style={{ background: researchingPlaceId === p.id ? "#3a2d47" : "#C25BD9", color: "#fff", border: "none",
+                      borderRadius: 7, padding: "5px 10px", fontFamily: head, fontWeight: 700, fontSize: 10.5 }}>
+                    {researchingPlaceId === p.id ? "Researching…" : "Research"}
+                  </button>
+                </div>
+              ))}
+              {nodes.filter(n => n.kind === "place" && n.adminPlaced).length === 0 && (
+                <div style={{ fontFamily: body, fontSize: 11.5, color: "#8a8496" }}>Publish a real location above first — research runs on published places.</div>
+              )}
+
+              <WorldBuilderReviewQueue graph={graph} onApprove={onApproveItem} onReject={onRejectItem} onEditField={onEditField} placeNameById={Object.fromEntries(nodes.filter(n => n.kind === "place").map(n => [n.id, n.name]))} />
+
+              <WorldBuilderTours graph={graph} activeTour={activeTour} onStartTour={onStartTour} onStopTour={onStopTour} />
             </div>
           )}
         </>
@@ -1767,6 +1899,111 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Review queue: everything AI has suggested, grouped by the place it's
+ * attached to — a card stack per place, exactly matching how AI research
+ * naturally comes back (a batch per venue, not one fact at a time). Approve
+ * flips straight to verified/live. Reject archives it (status becomes
+ * "rejected", never deleted — useful for noticing if the AI keeps suggesting
+ * the same wrong thing). Edit turns a field into an inline input; saving it
+ * both corrects the value AND marks that field admin-owned, which is what
+ * protects it from ever being silently clobbered by a future "regenerate."
+ */
+function WorldBuilderReviewQueue({ graph, onApprove, onReject, onEditField, placeNameById }) {
+  const [editingKey, setEditingKey] = useState(null); // `${kind}:${id}:${field}`
+  const [draft, setDraft] = useState("");
+  const groups = pendingByPlace(graph);
+  const placeIds = Object.keys(groups);
+  if (placeIds.length === 0) return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#5BD9B0", marginBottom: 5 }}>REVIEW QUEUE</div>
+      <div style={{ fontFamily: body, fontSize: 11.5, color: "#8a8496" }}>Nothing waiting — research a place above to fill this.</div>
+    </div>
+  );
+
+  function Field({ kind, item, field, label }) {
+    const key = `${kind}:${item.id}:${field}`;
+    const editable = editingKey === key;
+    if (editable) return (
+      <div style={{ display: "flex", gap: 5, marginTop: 3 }}>
+        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+          style={{ flex: 1, background: "#181C28", border: "1px solid #5BD9B0", borderRadius: 6, padding: "4px 7px", color: "#fff", fontFamily: body, fontSize: 11.5 }} />
+        <button onClick={() => { onEditField(kind, item.id, field, draft); setEditingKey(null); }}
+          style={{ background: "#5BD9B0", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>✓</button>
+      </div>
+    );
+    return (
+      <div onClick={() => { setEditingKey(key); setDraft(item[field] || ""); }} style={{ fontSize: 11.5, color: "#cbbfd6", marginTop: 2, cursor: "pointer" }}>
+        {label ? <b style={{ color: "#EDE7D9" }}>{label}: </b> : null}{item[field] || <i>(tap to add)</i>}
+        {item.editedFields && item.editedFields[field] && <span style={{ color: "#D9A441", fontSize: 9, marginLeft: 5 }}>● edited</span>}
+      </div>
+    );
+  }
+
+  function SuggestionCard({ kind, item }) {
+    const titleField = kind === "artwork" ? "title" : kind === "story" ? "title" : "name";
+    return (
+      <div style={{ background: "#00000040", borderRadius: 8, padding: "8px 10px", marginTop: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <Field kind={kind} item={item} field={titleField} />
+          <div style={{ display: "flex", gap: 4, flexShrink: 0, marginLeft: 8 }}>
+            <button onClick={() => onApprove(kind, item.id)} title="Approve" style={{ background: "#5BD9B0", border: "none", borderRadius: 6, width: 22, height: 22, fontSize: 12 }}>✓</button>
+            <button onClick={() => onReject(kind, item.id)} title="Reject" style={{ background: "#D9527A", border: "none", borderRadius: 6, width: 22, height: 22, fontSize: 12, color: "#fff" }}>✕</button>
+          </div>
+        </div>
+        <Field kind={kind} item={item} field={kind === "artwork" ? "description" : kind === "story" ? "body" : "bio"} />
+        <div style={{ fontSize: 9.5, color: "#8a8496", marginTop: 4, fontStyle: "italic" }}>{item.sourceNote}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#5BD9B0", marginBottom: 5 }}>REVIEW QUEUE</div>
+      {placeIds.map(pid => (
+        <div key={pid} style={{ marginBottom: 10 }}>
+          <div style={{ fontFamily: head, fontSize: 11.5, color: "#D9A441", fontWeight: 700 }}>{placeNameById[pid] || pid}</div>
+          {groups[pid].artists.map(a => <SuggestionCard key={a.id} kind="artist" item={a} />)}
+          {groups[pid].artworks.map(a => <SuggestionCard key={a.id} kind="artwork" item={a} />)}
+          {groups[pid].stories.map(s => <SuggestionCard key={s.id} kind="story" item={s} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Tours are just an ordered list of stops the admin assembles from already-
+ * published places — no pathfinding, no new detection logic. Progress is
+ * computed live from the SAME checkIns the arrival loop already writes, so
+ * a tour's completion can never drift out of sync with what the player
+ * actually did.
+ */
+function WorldBuilderTours({ graph, activeTour, onStartTour, onStopTour }) {
+  const tours = Object.values(graph.tours || {});
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#5B8FD9", marginBottom: 5 }}>TOURS</div>
+      {tours.length === 0 && <div style={{ fontFamily: body, fontSize: 11.5, color: "#8a8496" }}>No tours yet — tours are authored as ordered stop lists (see makeTourNode in knowledgeGraphEngine.js).</div>}
+      {tours.map(t => {
+        const isActive = activeTour && activeTour.tourId === t.id;
+        return (
+          <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0" }}>
+            <div>
+              <div style={{ fontFamily: body, fontSize: 12, color: "#EDE7D9" }}>{t.name}</div>
+              <div style={{ fontFamily: body, fontSize: 10, color: "#8a8496" }}>{t.stops.length} stops · ~{t.estimatedMinutes}min</div>
+            </div>
+            <button onClick={() => (isActive ? onStopTour() : onStartTour(t.id))}
+              style={{ background: isActive ? "#D9527A" : "#5B8FD9", color: "#fff", border: "none", borderRadius: 7, padding: "5px 10px", fontFamily: head, fontWeight: 700, fontSize: 10.5 }}>
+              {isActive ? "Stop" : "Start"}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -2182,6 +2419,17 @@ function createBuildingModelsLayer() {
         if (beam) beam.material.opacity = 0.42 + Math.sin(this._heroT * 2.4 + gi * 1.3) * 0.13;
         gi++;
       }
+      // Tour trail animation: scrolling glow (the actual "flowing" look),
+      // a slow cycle through the app's palette (the "colorful" ask), and
+      // per-particle twinkle so the sparkles read as alive, not static dots.
+      if (this.tourTrail) {
+        this.tourTrail.texture.offset.x -= dt * 0.6;
+        const hue = (this._heroT * 0.06) % 1;
+        this.tourTrail.material.color.setHSL(hue, 0.65, 0.62);
+        this.tourTrail.particles.material.color.setHSL((hue + 0.15) % 1, 0.75, 0.7);
+        const sizes = this.tourTrail.phases;
+        this.tourTrail.particles.material.size = 0.35 + Math.sin(this._heroT * 3 + sizes[0]) * 0.15;
+      }
       this.renderer.resetState();
       this.renderer.render(this.scene, this.camera);
       this.map.triggerRepaint();
@@ -2418,6 +2666,109 @@ function createBuildingModelsLayer() {
         this.sun.target.position.set(local.x, local.y, 0);
       }
       if (this.shadowGround) this.shadowGround.position.set(local.x, local.y, 0.05);
+    },
+
+    /**
+     * The whimsical curved tour trail. A straight tube between two GPS
+     * points would be the "correct" but boring version; this instead builds
+     * a spline through several control points so it can arc IN toward a
+     * mural's facade (never clip through the wall — see the bend point
+     * math) and rise back up on its way to the next stop. Real 3D geometry
+     * the whole way, same guarantee as the hero beam fix: it's welded to
+     * true coordinates, so it can't develop the "floats when far away"
+     * problem flat HTML content had.
+     *
+     * @param playerLocal {x,y} in the SAME local-meter space as everything
+     *   else in this scene (call toLocalMeters on the player's lat/lng first).
+     * @param nextStop {lat, lng, muralBearingDeg?, muralOffsetMeters?} — the
+     *   upcoming tour stop; muralBearingDeg/muralOffsetMeters are optional
+     *   and, when present, pull the curve in toward that specific wall
+     *   instead of just the place's center point.
+     */
+    updateTourTrail(playerLocal, nextStop) {
+      if (!nextStop) { this.clearTourTrail(); return; }
+      const stopLocal = this.toLocalMeters(nextStop.lng, nextStop.lat);
+      const start = new THREE.Vector3(playerLocal.x, playerLocal.y, 1.5); // ankle-height start, not underground
+      const end = new THREE.Vector3(stopLocal.x, stopLocal.y, 1.5);
+      const midX = (start.x + end.x) / 2, midY = (start.y + end.y) / 2;
+      const dist = start.distanceTo(end);
+      const points = [start];
+      if (nextStop.muralBearingDeg != null) {
+        // Bend TOWARD the mural's wall, offset OUTWARD from it by
+        // muralOffsetMeters (default 3m) so the curve hugs the facade
+        // without ever clipping through it — "through murals" means arcing
+        // close past the surface, not intersecting the solid building mesh.
+        const rad = THREE.MathUtils.degToRad(nextStop.muralBearingDeg);
+        const offset = nextStop.muralOffsetMeters ?? 3;
+        const bend = new THREE.Vector3(
+          stopLocal.x + Math.sin(rad) * offset,
+          stopLocal.y - Math.cos(rad) * offset,
+          4 + Math.min(3, dist * 0.03) // a little lift into the bend
+        );
+        points.push(bend);
+      } else {
+        // No specific mural target: a gentle whimsical midpoint bow, capped
+        // so it always still reads as "walk this way" and never wanders far
+        // enough sideways to look aimless.
+        const perpX = -(end.y - start.y), perpY = (end.x - start.x);
+        const perpLen = Math.hypot(perpX, perpY) || 1;
+        const bow = Math.min(6, dist * 0.12); // bounded sideways bend
+        points.push(new THREE.Vector3(
+          midX + (perpX / perpLen) * bow,
+          midY + (perpY / perpLen) * bow,
+          3 + Math.min(4, dist * 0.04) // bounded height bob
+        ));
+      }
+      points.push(end);
+      const curve = new THREE.CatmullRomCurve3(points, false, "catmullrom", 0.5);
+
+      if (!this.tourTrail) {
+        // Built once: a small canvas-generated gradient (soft core, glowy
+        // falloff) tiled along the tube's length and scrolled every frame —
+        // that scroll IS the "flowing, sparkling" look, not a shader.
+        const canvas = document.createElement("canvas");
+        canvas.width = 64; canvas.height = 16;
+        const ctx = canvas.getContext("2d");
+        const grad = ctx.createLinearGradient(0, 0, 64, 0);
+        grad.addColorStop(0, "#00000000"); grad.addColorStop(0.5, "#ffffffff"); grad.addColorStop(1, "#00000000");
+        ctx.fillStyle = grad; ctx.fillRect(0, 0, 64, 16);
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = THREE.RepeatWrapping; texture.repeat.set(4, 1);
+        const material = new THREE.MeshBasicMaterial({
+          map: texture, color: 0xC25BD9, transparent: true, opacity: 0.85,
+          side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
+        });
+        const geometry = new THREE.TubeGeometry(curve, 40, 0.4, 8, false);
+        const mesh = new THREE.Mesh(geometry, material);
+        // Sparkle particles: sampled along the same curve, each with its own
+        // phase so they twinkle rather than blink in unison.
+        const N = 24;
+        const positions = new Float32Array(N * 3);
+        curve.getSpacedPoints(N - 1).forEach((p, i) => { positions[i * 3] = p.x; positions[i * 3 + 1] = p.y; positions[i * 3 + 2] = p.z + 0.3; });
+        const particleGeo = new THREE.BufferGeometry();
+        particleGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+        const particleMat = new THREE.PointsMaterial({ color: 0xffe08a, size: 0.5, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+        const particles = new THREE.Points(particleGeo, particleMat);
+        this.scene.add(mesh); this.scene.add(particles);
+        this.tourTrail = { mesh, geometry, material, texture, particles, particleGeo, phases: Array.from({ length: N }, () => Math.random() * Math.PI * 2) };
+      } else {
+        // Rebuild geometry in place (leg changed or player moved enough to
+        // matter) without tearing down the material/texture/particle system.
+        this.tourTrail.geometry.dispose();
+        this.tourTrail.geometry = new THREE.TubeGeometry(curve, 40, 0.4, 8, false);
+        this.tourTrail.mesh.geometry = this.tourTrail.geometry;
+        const N = this.tourTrail.phases.length;
+        const positions = this.tourTrail.particleGeo.attributes.position.array;
+        curve.getSpacedPoints(N - 1).forEach((p, i) => { positions[i * 3] = p.x; positions[i * 3 + 1] = p.y; positions[i * 3 + 2] = p.z + 0.3; });
+        this.tourTrail.particleGeo.attributes.position.needsUpdate = true;
+      }
+    },
+    clearTourTrail() {
+      if (!this.tourTrail) return;
+      this.scene.remove(this.tourTrail.mesh); this.scene.remove(this.tourTrail.particles);
+      this.tourTrail.geometry.dispose(); this.tourTrail.material.dispose(); this.tourTrail.texture.dispose();
+      this.tourTrail.particleGeo.dispose(); this.tourTrail.particles.material.dispose();
+      this.tourTrail = null;
     },
   };
 }
@@ -2678,7 +3029,7 @@ function PlayerAvatar({ heading, avatarModel = "robot", isMoving = false }) {
   );
 }
 
-function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, jumpTrigger }) {
+function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, jumpTrigger, graph = { tours: {} }, activeTour }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]); // { marker, root } — so React roots get cleanly unmounted, not leaked
@@ -2898,6 +3249,24 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
     // The robot lives in the 3D scene at true world scale — position, heading,
     // and walk/stand state all update through the custom layer, not a marker.
     if (buildingLayerRef.current) buildingLayerRef.current.updatePlayer(playerPosition);
+    // Tour Mode: feed the curved trail the CURRENT (not-yet-visited) stop's
+    // real coordinates, plus whichever wall-facing data that stop carries —
+    // resolving placeId -> lat/lng from `nodes`, since Place data lives
+    // there, not duplicated into the graph.
+    if (buildingLayerRef.current) {
+      const tour = activeTour && graph.tours[activeTour.tourId];
+      const stop = tour && tour.stops[activeTour.legIndex];
+      const stopPlace = stop && nodes.find(n => n.id === stop.placeId);
+      if (stop && stopPlace) {
+        const local = buildingLayerRef.current.toLocalMeters(playerPosition.lng, playerPosition.lat);
+        buildingLayerRef.current.updateTourTrail(local, {
+          lat: stopPlace.lat, lng: stopPlace.lng,
+          muralBearingDeg: stop.wallBearingDeg, muralOffsetMeters: stop.wallOffsetMeters,
+        });
+      } else {
+        buildingLayerRef.current.clearTourTrail();
+      }
+    }
     if (!interior) {
       if (!hasArrivedRef.current) {
         // The arrival sequence: camera flies smoothly from the wide establishing
@@ -2940,7 +3309,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         });
       }
     }
-  }, [playerPosition, mapReady, interior, avatarModel, worldBuilderActive]);
+  }, [playerPosition, mapReady, interior, avatarModel, worldBuilderActive, graph, activeTour]);
 
   // A deliberate "jump to address" always moves the camera, even during World
   // Builder free-roam — the free-roam guard above is specifically meant to stop
