@@ -627,12 +627,13 @@ export default function CreativeEmpireOS() {
     setResearchingPlaceId(place.id);
     try {
       const { system, user } = buildResearchPrompt(place);
-      const { data } = await callModel({ system, messages: [{ role: "user", content: user }], maxTokens: 900 });
+      const { data, usedSearch } = await callModel({ system, messages: [{ role: "user", content: user }], maxTokens: 900, useSearch: true });
       const parsed = extractJson(allText(data), "object");
       const delta = suggestionsToGraphDelta(parsed, place.id);
       setGraph(g => mergeGraphDelta(g, delta));
       const n = delta.artists.length + delta.artworks.length + delta.stories.length;
-      flash(n ? `🔮 Found ${n} suggestion${n === 1 ? "" : "s"} for ${place.name} — review in the queue` : `No confident results for ${place.name} — try adding facts manually`);
+      const searchNote = usedSearch ? " (web-grounded)" : " (no live search — general knowledge only)";
+      flash(n ? `🔮 Found ${n} suggestion${n === 1 ? "" : "s"} for ${place.name}${searchNote} — review in the queue` : `No confident results for ${place.name} — try adding facts manually`);
     } catch (err) {
       flash(`Research failed: ${err.message || "unknown error"}`);
     } finally {
