@@ -22,11 +22,18 @@
 // Returns:   { data, usedSearch }
 
 // Pick your model — this is a real choice, not swapped automatically.
-// "gemini-2.5-flash" is the fast/cheap default; "gemini-2.5-pro" trades speed
-// for more capable reasoning if the research quality needs it. Check
-// ai.google.dev/gemini-api/docs/models for the current list — Google's
-// model lineup and exact tool-name conventions change over time.
-const MODEL = "gemini-2.5-flash";
+// gemini-2.5-flash (the previous value here) was retired for new API keys
+// as of this writing — Google deprecates specific model snapshots on an
+// ongoing basis. Using "gemini-flash-latest" instead of a pinned snapshot
+// name means Google always points this at whatever their current
+// recommended fast/cheap model is (currently Gemini 3.5 Flash), so this
+// exact "model no longer available" error shouldn't recur just from time
+// passing. Trade-off: behavior/quality can shift slightly whenever Google
+// updates what's behind the alias, with no app-side change or warning. For
+// a solo project updated infrequently, that trade is almost certainly
+// worth it — pin to an explicit snapshot (e.g. "gemini-3.5-flash") instead
+// if you'd rather control exactly when the model changes.
+const MODEL = "gemini-flash-latest";
 const GEMINI_URL = (model, key) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
 
 function toGeminiContents(messages) {
