@@ -1,0 +1,271 @@
+/**
+ * Knowledge Graph engine — pure functions only, no React, no fetch.
+ *
+ * SHAPE: nodes are plain objects keyed by id inside per-type buckets
+ * (artists, artworks, stories, tours). Edges are their OWN objects, not
+ * foreign-key fields — this is the whole point of a graph over a flat
+ * table: a relationship can carry its own properties (e.g. an artwork's
+ * DISPLAYED_AT edge can record dateInstalled/isPermanent, since art moves).
+ *
+ * Full graph shape (as stored in the app's `graph` state):
+ * {
+ *   artists:  { [id]: ArtistNode },
+ *   artworks: { [id]: ArtworkNode },
+ *   stories:  { [id]: StoryNode },
+ *   tours:    { [id]: TourNode },
+ *   edges:    { [id]: Edge },
+ * }
+ * Places themselves are NOT duplicated here — they stay exactly where they
+ * already live (World Builder's places/discoveredLocations), and edges just
+ * reference their existing ids. Neighborhoods likewise reuse whatever
+ * grouping World Builder already has; no new Neighborhood table required to
+ * get neighborhood-completion math (see computeNeighborhoodProgress).
+ *
+ * REVIEW-QUEUE FIELDS (on every AI-touched node/edge):
+ *   status:        "pending" | "verified" | "rejected"
+ *   suggestedBy:   "ai" | "admin"
+ *   sourceNote:    string — where the AI says this came from (so a person
+ *                  can actually judge it, not just trust it)
+ *   suggestedAt:   epoch ms
+ *   editedFields:  { [fieldName]: true } — sim: once you hand-edit a field,
+ *                  it's excluded from future "regenerate" calls so a
+ *                  redo-this-place pass can never clobber your own work.
+ */
+
+let _idCounter = 0;
+export function makeId(prefix) {
+  _idCounter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${_idCounter}`;
+}
+
+/* ---------------- Node constructors ---------------- */
+
+export function makeArtistNode({ name, bio = "", portraitUrl = "", website = "", social = [], suggestedBy = "admin", sourceNote = "" } = {}) {
+  return {
+    id: makeId("artist"), name, bio, portraitUrl, website, social,
+    status: suggestedBy === "ai" ? "pending" : "verified",
+    suggestedBy, sourceNote, suggestedAt: Date.now(), editedFields: {},
+  };
+}
+
+export function makeArtworkNode({ title, description = "", dateCreated = "", photos = [], suggestedBy = "admin", sourceNote = "" } = {}) {
+  return {
+    id: makeId("artwork"), title, description, dateCreated, photos,
+    status: suggestedBy === "ai" ? "pending" : "verified",
+    suggestedBy, sourceNote, suggestedAt: Date.now(), editedFields: {},
+  };
+}
+
+export function makeStoryNode({ title, body = "", suggestedBy = "admin", sourceNote = "" } = {}) {
+  return {
+    id: makeId("story"), title, body,
+    status: suggestedBy === "ai" ? "pending" : "verified",
+    suggestedBy, sourceNote, suggestedAt: Date.now(), editedFields: {},
+  };
+}
+
+/**
+ * A Tour's stops are an ORDERED array, not edges — order is intrinsic to a
+ * tour and simplest kept as a plain array field rather than modeled as N
+ * separate STOP_ON edges each carrying an `order` property. Either is
+ * defensible; this is the simpler one and it's all the tour trail needs.
+ * Each stop: { placeId, artworkId?, wallOffsetMeters?, wallBearingDeg? } —
+ * the optional wall fields are what let the tour trail curve in toward a
+ * specific mural facade instead of just the place's center point.
+ */
+export function makeTourNode({ name, theme = "", estimatedMinutes = 30, stops = [], badge = "" } = {}) {
+  return { id: makeId("tour"), name, theme, estimatedMinutes, stops, badge, status: "verified" };
+}
+
+/* ---------------- Edge constructor ---------------- */
+
+const EDGE_TYPES = [
+  "LOCATED_IN", "CREATED_BY", "DISPLAYED_AT", "EXHIBITED_AT",
+  "HOSTS", "PARTICIPATES_IN", "NEAR", "MENTIONS", "COLLABORATED_WITH",
+];
+export function makeEdge({ type, from, to, properties = {}, suggestedBy = "admin", sourceNote = "" }) {
+  if (!EDGE_TYPES.includes(type)) throw new Error(`Unknown edge type: ${type}`);
+  return {
+    id: makeId("edge"), type, from, to, properties,
+    status: suggestedBy === "ai" ? "pending" : "verified",
+    suggestedBy, sourceNote, suggestedAt: Date.now(),
+  };
+}
+
+/* ---------------- Review-queue transitions (all pure: graph in, graph out) ---------------- */
+
+export function approveItem(graph, kind, id) {
+  const bucket = { artist: "artists", artwork: "artworks", story: "stories", edge: "edges" }[kind];
+  if (!bucket || !graph[bucket][id]) return graph;
+  return { ...graph, [bucket]: { ...graph[bucket], [id]: { ...graph[bucket][id], status: "verified" } } };
+}
+
+export function rejectItem(graph, kind, id) {
+  const bucket = { artist: "artists", artwork: "artworks", story: "stories", edge: "edges" }[kind];
+  if (!bucket || !graph[bucket][id]) return graph;
+  return { ...graph, [bucket]: { ...graph[bucket], [id]: { ...graph[bucket][id], status: "rejected" } } };
+}
+
+/** Editing a field marks it admin-owned (locked from future regenerate) and,
+ *  if this is the person's first touch on an AI-suggested item, promotes it
+ *  straight to verified — an edited fact is a reviewed fact. */
+export function editField(graph, kind, id, field, value) {
+  const bucket = { artist: "artists", artwork: "artworks", story: "stories" }[kind];
+  if (!bucket || !graph[bucket][id]) return graph;
+  const node = graph[bucket][id];
+  const next = {
+    ...node, [field]: value,
+    editedFields: { ...node.editedFields, [field]: true },
+    status: node.status === "pending" ? "verified" : node.status,
+  };
+  return { ...graph, [bucket]: { ...graph[bucket], [id]: next } };
+}
+
+/** Which fields are safe to regenerate: everything EXCEPT ones the admin has
+ *  personally edited. This is the actual safeguard behind "regenerate should
+ *  never silently overwrite something you've already touched." */
+export function regeneratableFields(node, allFieldNames) {
+  return allFieldNames.filter(f => !node.editedFields || !node.editedFields[f]);
+}
+
+/* ---------------- Derived collection queries — nothing stored, all computed ---------------- */
+
+const verified = obj => Object.values(obj || {}).filter(n => n.status === "verified");
+
+/** Every verified edge of a given type, as {from,to,properties} triples. */
+function edgesOfType(graph, type) {
+  return verified(graph.edges).filter(e => e.type === type);
+}
+
+/** Artist collection progress: how many of an artist's known artworks has
+ *  the player actually unlocked (via checkIns/unlockedDiscoverables). */
+export function computeArtistProgress(graph, artistId, unlockedDiscoverableIds) {
+  const artworkIds = edgesOfType(graph, "CREATED_BY")
+    .filter(e => e.to === artistId)
+    .map(e => e.from);
+  const total = artworkIds.length;
+  const found = artworkIds.filter(id => unlockedDiscoverableIds.has(id)).length;
+  return { total, found, pct: total ? found / total : 0 };
+}
+
+/** Neighborhood completion, generalized across every collection type at
+ *  once, purely from LOCATED_IN + whatever discoverable edges exist for
+ *  places in that neighborhood. `placesInNeighborhood` is supplied by the
+ *  caller (World Builder's existing place list filtered by neighborhoodId)
+ *  since Place itself lives outside this engine. */
+export function computeNeighborhoodProgress(graph, placeIds, checkIns) {
+  const placeSet = new Set(placeIds);
+  const artworksAtPlaces = edgesOfType(graph, "DISPLAYED_AT").filter(e => placeSet.has(e.to));
+  const totalPlaces = placeIds.length;
+  const visitedPlaces = placeIds.filter(id => checkIns[id]).length;
+  return {
+    places: { total: totalPlaces, found: visitedPlaces },
+    artworks: { total: artworksAtPlaces.length }, // "found" side computed by caller against unlockedDiscoverables, same pattern as computeArtistProgress
+  };
+}
+
+/** Tour completion: how many ordered stops have a check-in. */
+export function computeTourProgress(tour, checkIns) {
+  const total = tour.stops.length;
+  const found = tour.stops.filter(s => checkIns[s.placeId]).length;
+  return { total, found, pct: total ? found / total : 0, nextStop: tour.stops.find(s => !checkIns[s.placeId]) || null };
+}
+
+/** "Nearby creative places" / tour recommendation: places connected to the
+ *  current place by a NEAR edge, within an optional max hop count of 1 (i.e.
+ *  direct neighbors only — this is intentionally not a full graph search,
+ *  since NEAR edges are precomputed proximity, not a live traversal). */
+export function nearbyPlaceIds(graph, placeId) {
+  return edgesOfType(graph, "NEAR")
+    .filter(e => e.from === placeId || e.to === placeId)
+    .map(e => (e.from === placeId ? e.to : e.from));
+}
+
+/* ---------------- AI research: prompt + parse (no fetch here — App.jsx calls callModel) ---------------- */
+
+/**
+ * Builds the {system, user} prompt for researching one Creative Place.
+ * Deliberately conservative: told to return ONLY high-confidence, well-known
+ * facts and to say so explicitly when uncertain, specifically because this
+ * app's backend model (Groq/Llama) has no live web search wired in (see
+ * api/model.js's useSearch no-op) — without that guard, a small real-world
+ * venue the model doesn't actually know about would likely get plausible-
+ * sounding, fabricated artists/artworks rather than an honest "not sure."
+ */
+export function buildResearchPrompt(place) {
+  const system = `You are researching a real, physical creative venue for a location-based game. Only return facts you have genuine, specific knowledge of. If you are not confident a fact is real and specific to THIS exact venue, omit it entirely rather than guessing or generalizing from similar venues. Respond with ONLY a JSON object, no prose, no markdown fences, matching exactly:
+{
+  "artists": [{ "name": string, "bio": string, "confidence": "high"|"low", "sourceNote": string }],
+  "artworks": [{ "title": string, "description": string, "artistName": string|null, "confidence": "high"|"low", "sourceNote": string }],
+  "history": { "body": string, "confidence": "high"|"low", "sourceNote": string } | null
+}
+"sourceNote" must describe WHY you believe this (e.g. "widely known gallery opening announced 2023", not a fabricated citation). If you have no genuine, specific knowledge of this venue at all, return { "artists": [], "artworks": [], "history": null } — an empty, honest result is far better than invented content for a real place with real GPS coordinates.`;
+  const user = `Venue: "${place.name}"\nCategory: ${place.category || "unknown"}\nLocation: ${place.address || `${place.lat}, ${place.lng}`}\nNeighborhood: ${place.neighborhood || "Castleberry Hill, Atlanta"}`;
+  return { system, user };
+}
+
+/** Turns the parsed AI JSON into pending graph nodes+edges, tagged for
+ *  review. Low-confidence items get an extra "(unverified)" marker folded
+ *  into sourceNote so they're visually distinct in the review queue even
+ *  before a human looks closely. */
+export function suggestionsToGraphDelta(parsed, placeId) {
+  const artists = [];
+  const artworks = [];
+  const edges = [];
+  const artistIdByName = {};
+
+  for (const a of parsed.artists || []) {
+    const node = makeArtistNode({
+      name: a.name, bio: a.bio || "", suggestedBy: "ai",
+      sourceNote: a.confidence === "low" ? `${a.sourceNote} (unverified — low confidence)` : a.sourceNote,
+    });
+    artists.push(node);
+    artistIdByName[a.name] = node.id;
+    edges.push(makeEdge({ type: "EXHIBITED_AT", from: node.id, to: placeId, suggestedBy: "ai", sourceNote: a.sourceNote }));
+  }
+  for (const w of parsed.artworks || []) {
+    const node = makeArtworkNode({
+      title: w.title, description: w.description || "", suggestedBy: "ai",
+      sourceNote: w.confidence === "low" ? `${w.sourceNote} (unverified — low confidence)` : w.sourceNote,
+    });
+    artworks.push(node);
+    edges.push(makeEdge({ type: "DISPLAYED_AT", from: node.id, to: placeId, suggestedBy: "ai", sourceNote: w.sourceNote }));
+    const artistId = w.artistName && artistIdByName[w.artistName];
+    if (artistId) edges.push(makeEdge({ type: "CREATED_BY", from: node.id, to: artistId, suggestedBy: "ai", sourceNote: w.sourceNote }));
+  }
+  const stories = [];
+  if (parsed.history && parsed.history.body) {
+    stories.push(makeStoryNode({
+      title: `History`, body: parsed.history.body, suggestedBy: "ai",
+      sourceNote: parsed.history.confidence === "low" ? `${parsed.history.sourceNote} (unverified — low confidence)` : parsed.history.sourceNote,
+    }));
+    edges.push(makeEdge({ type: "MENTIONS", from: stories[0].id, to: placeId, suggestedBy: "ai", sourceNote: parsed.history.sourceNote }));
+  }
+  return { artists, artworks, stories, edges };
+}
+
+/** Merges a delta (from suggestionsToGraphDelta, or a hand-authored add)
+ *  into the full graph state. Pure — returns a new graph object. */
+export function mergeGraphDelta(graph, delta) {
+  const next = { ...graph, artists: { ...graph.artists }, artworks: { ...graph.artworks }, stories: { ...graph.stories }, edges: { ...graph.edges } };
+  (delta.artists || []).forEach(n => { next.artists[n.id] = n; });
+  (delta.artworks || []).forEach(n => { next.artworks[n.id] = n; });
+  (delta.stories || []).forEach(n => { next.stories[n.id] = n; });
+  (delta.edges || []).forEach(e => { next.edges[e.id] = e; });
+  return next;
+}
+
+/** Everything still awaiting review, grouped by the place it's attached to
+ *  (via edges) — this is exactly the shape World Builder's review queue
+ *  renders: a card stack per place. */
+export function pendingByPlace(graph) {
+  const groups = {}; // placeId -> { artists:[], artworks:[], stories:[] }
+  const ensure = pid => (groups[pid] = groups[pid] || { artists: [], artworks: [], stories: [] });
+  Object.values(graph.edges).forEach(e => {
+    if (e.status !== "pending") return;
+    if (e.type === "EXHIBITED_AT" && graph.artists[e.from]?.status === "pending") ensure(e.to).artists.push(graph.artists[e.from]);
+    if (e.type === "DISPLAYED_AT" && graph.artworks[e.from]?.status === "pending") ensure(e.to).artworks.push(graph.artworks[e.from]);
+    if (e.type === "MENTIONS" && graph.stories[e.from]?.status === "pending") ensure(e.to).stories.push(graph.stories[e.from]);
+  });
+  return groups;
+}
