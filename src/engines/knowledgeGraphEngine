@@ -56,9 +56,21 @@ export function makeArtworkNode({ title, description = "", dateCreated = "", pho
   };
 }
 
-export function makeStoryNode({ title, body = "", suggestedBy = "admin", sourceNote = "" } = {}) {
+export function makeStoryNode({ title, body = "", type = "history", ownerNames = [], businessTypes = [], suggestedBy = "admin", sourceNote = "" } = {}) {
   return {
-    id: makeId("story"), title, body,
+    id: makeId("story"), title, body, type, ownerNames, businessTypes,
+    status: suggestedBy === "ai" ? "pending" : "verified",
+    suggestedBy, sourceNote, suggestedAt: Date.now(), editedFields: {},
+  };
+}
+
+/** Event — from the original data model (openings, exhibitions, workshops,
+ *  performances, artist talks, strolls) that never actually got built until
+ *  now. Tied to its place via a HOSTS edge, same review-queue treatment as
+ *  everything else. */
+export function makeEventNode({ title, description = "", date = "", eventType = "event", suggestedBy = "admin", sourceNote = "" } = {}) {
+  return {
+    id: makeId("event"), title, description, date, eventType,
     status: suggestedBy === "ai" ? "pending" : "verified",
     suggestedBy, sourceNote, suggestedAt: Date.now(), editedFields: {},
   };
@@ -95,13 +107,13 @@ export function makeEdge({ type, from, to, properties = {}, suggestedBy = "admin
 /* ---------------- Review-queue transitions (all pure: graph in, graph out) ---------------- */
 
 export function approveItem(graph, kind, id) {
-  const bucket = { artist: "artists", artwork: "artworks", story: "stories", edge: "edges" }[kind];
+  const bucket = { artist: "artists", artwork: "artworks", story: "stories", event: "events", edge: "edges" }[kind];
   if (!bucket || !graph[bucket][id]) return graph;
   return { ...graph, [bucket]: { ...graph[bucket], [id]: { ...graph[bucket][id], status: "verified" } } };
 }
 
 export function rejectItem(graph, kind, id) {
-  const bucket = { artist: "artists", artwork: "artworks", story: "stories", edge: "edges" }[kind];
+  const bucket = { artist: "artists", artwork: "artworks", story: "stories", event: "events", edge: "edges" }[kind];
   if (!bucket || !graph[bucket][id]) return graph;
   return { ...graph, [bucket]: { ...graph[bucket], [id]: { ...graph[bucket][id], status: "rejected" } } };
 }
@@ -110,7 +122,7 @@ export function rejectItem(graph, kind, id) {
  *  if this is the person's first touch on an AI-suggested item, promotes it
  *  straight to verified — an edited fact is a reviewed fact. */
 export function editField(graph, kind, id, field, value) {
-  const bucket = { artist: "artists", artwork: "artworks", story: "stories" }[kind];
+  const bucket = { artist: "artists", artwork: "artworks", story: "stories", event: "events" }[kind];
   if (!bucket || !graph[bucket][id]) return graph;
   const node = graph[bucket][id];
   const next = {
@@ -197,11 +209,18 @@ export function nearbyPlaceIds(graph, placeId) {
 export function buildResearchPrompt(place, searchResults = []) {
   const system = `You are extracting structured facts about a real, physical creative venue from search results, for a location-based game. Use ONLY the information in the search results provided below — do not add anything from general knowledge, and do not generalize from similar venues. If the search results don't clearly support a fact about THIS exact venue, omit it. Respond with ONLY a JSON object, no prose, no markdown fences, matching exactly:
 {
+  "funFacts": [{ "fact": string, "sourceUrl": string }],
+  "profile": { "description": string, "businessTypes": [string], "ownerNames": [string], "sourceUrl": string } | null,
+  "events": [{ "title": string, "description": string, "date": string, "eventType": "opening"|"exhibition"|"workshop"|"performance"|"artist_talk"|"stroll"|"event", "sourceUrl": string }],
   "artists": [{ "name": string, "bio": string, "sourceUrl": string }],
   "artworks": [{ "title": string, "description": string, "artistName": string|null, "sourceUrl": string }],
   "history": { "body": string, "sourceUrl": string } | null
 }
-"sourceUrl" MUST be one of the exact URLs given below — never invent or paraphrase a URL. If the search results contain nothing specific and confident about this venue, return { "artists": [], "artworks": [], "history": null } — an empty, honest result is far better than invented content.`;
+"funFacts" are short, genuinely interesting or surprising tidbits about the venue — a quirky detail, an unusual anecdote, something a visitor would enjoy knowing. Each one sentence or two, casual tone, pulled directly from the search results — never invented. This is the category to prioritize filling if the results support it, even when the more formal categories below don't have enough for a confident entry.
+"profile" is a general "what is this place" summary: what kind of venue it is (e.g. "gallery on the ground floor with a tattoo studio upstairs"), and current use — NOT its founding history (that's the separate "history" field). "businessTypes" are short tags like "gallery", "tattoo studio", "music venue". "ownerNames" are real names ONLY if a source directly states who owns/runs the venue.
+CRITICAL: never infer or guess any identity, ownership, or demographic characterization (e.g. "Black-owned", "family-owned", "woman-owned") from a name, photo, or general impression. Only include such a characterization if a cited source states it EXPLICITLY, in those or equivalent words, as the venue's own description of itself — and quote/attribute it plainly in "description" when you do. If sources don't explicitly say this, omit it entirely rather than guessing.
+"events" are specific, dated (or date-ranged) happenings — an opening, an exhibition run, a workshop — not the venue's general hours or a recurring weekly special. If no specific event with an actual date is mentioned, return an empty array.
+"sourceUrl" MUST be one of the exact URLs given below — never invent or paraphrase a URL. If the search results contain nothing specific and confident about this venue at all, return every field empty/null — an honest empty result is far better than invented content for a real place with real GPS coordinates.`;
   const sourcesBlock = searchResults.length
     ? searchResults.map((r, i) => `[Source ${i + 1}] ${r.url}\n${r.title}\n${r.content}`).join("\n\n")
     : "(no search results were found for this venue)";
@@ -223,6 +242,7 @@ export function buildResearchQuery(place) {
 export function suggestionsToGraphDelta(parsed, placeId) {
   const artists = [];
   const artworks = [];
+  const events = [];
   const edges = [];
   const artistIdByName = {};
 
@@ -239,20 +259,48 @@ export function suggestionsToGraphDelta(parsed, placeId) {
     const artistId = w.artistName && artistIdByName[w.artistName];
     if (artistId) edges.push(makeEdge({ type: "CREATED_BY", from: node.id, to: artistId, suggestedBy: "ai", sourceNote: w.sourceUrl || "" }));
   }
-  const stories = [];
-  if (parsed.history && parsed.history.body) {
-    stories.push(makeStoryNode({ title: `History`, body: parsed.history.body, suggestedBy: "ai", sourceNote: parsed.history.sourceUrl || "" }));
-    edges.push(makeEdge({ type: "MENTIONS", from: stories[0].id, to: placeId, suggestedBy: "ai", sourceNote: parsed.history.sourceUrl || "" }));
+  for (const ev of parsed.events || []) {
+    const node = makeEventNode({ title: ev.title, description: ev.description || "", date: ev.date || "", eventType: ev.eventType || "event", suggestedBy: "ai", sourceNote: ev.sourceUrl || "" });
+    events.push(node);
+    edges.push(makeEdge({ type: "HOSTS", from: placeId, to: node.id, suggestedBy: "ai", sourceNote: ev.sourceUrl || "" }));
   }
-  return { artists, artworks, stories, edges };
+  const stories = [];
+  // Fun facts: each one is its own small Story so it can be approved/rejected
+  // independently — a place might have three great fun facts and one dud,
+  // and there's no reason rejecting one should cost the others.
+  for (const ff of parsed.funFacts || []) {
+    if (!ff.fact) continue;
+    const node = makeStoryNode({ title: "Fun fact", body: ff.fact, type: "fact", suggestedBy: "ai", sourceNote: ff.sourceUrl || "" });
+    stories.push(node);
+    edges.push(makeEdge({ type: "MENTIONS", from: node.id, to: placeId, suggestedBy: "ai", sourceNote: ff.sourceUrl || "" }));
+  }
+  if (parsed.history && parsed.history.body) {
+    stories.push(makeStoryNode({ title: "History", body: parsed.history.body, type: "history", suggestedBy: "ai", sourceNote: parsed.history.sourceUrl || "" }));
+    edges.push(makeEdge({ type: "MENTIONS", from: stories[stories.length - 1].id, to: placeId, suggestedBy: "ai", sourceNote: parsed.history.sourceUrl || "" }));
+  }
+  // The general "what is this place, who runs it" profile — separate from
+  // History (founding story) — this is what actually answers "tell me about
+  // it": venue type, current use, and ownership IF a source explicitly
+  // states it (see the prompt's guard against inferring identity/ownership
+  // demographics from indirect cues).
+  if (parsed.profile && (parsed.profile.description || (parsed.profile.ownerNames || []).length)) {
+    stories.push(makeStoryNode({
+      title: "About this place", body: parsed.profile.description || "", type: "profile",
+      ownerNames: parsed.profile.ownerNames || [], businessTypes: parsed.profile.businessTypes || [],
+      suggestedBy: "ai", sourceNote: parsed.profile.sourceUrl || "",
+    }));
+    edges.push(makeEdge({ type: "MENTIONS", from: stories[stories.length - 1].id, to: placeId, suggestedBy: "ai", sourceNote: parsed.profile.sourceUrl || "" }));
+  }
+  return { artists, artworks, events, stories, edges };
 }
 
 /** Merges a delta (from suggestionsToGraphDelta, or a hand-authored add)
  *  into the full graph state. Pure — returns a new graph object. */
 export function mergeGraphDelta(graph, delta) {
-  const next = { ...graph, artists: { ...graph.artists }, artworks: { ...graph.artworks }, stories: { ...graph.stories }, edges: { ...graph.edges } };
+  const next = { ...graph, artists: { ...graph.artists }, artworks: { ...graph.artworks }, events: { ...(graph.events || {}) }, stories: { ...graph.stories }, edges: { ...graph.edges } };
   (delta.artists || []).forEach(n => { next.artists[n.id] = n; });
   (delta.artworks || []).forEach(n => { next.artworks[n.id] = n; });
+  (delta.events || []).forEach(n => { next.events[n.id] = n; });
   (delta.stories || []).forEach(n => { next.stories[n.id] = n; });
   (delta.edges || []).forEach(e => { next.edges[e.id] = e; });
   return next;
@@ -262,13 +310,17 @@ export function mergeGraphDelta(graph, delta) {
  *  (via edges) — this is exactly the shape World Builder's review queue
  *  renders: a card stack per place. */
 export function pendingByPlace(graph) {
-  const groups = {}; // placeId -> { artists:[], artworks:[], stories:[] }
-  const ensure = pid => (groups[pid] = groups[pid] || { artists: [], artworks: [], stories: [] });
+  const groups = {}; // placeId -> { artists:[], artworks:[], events:[], stories:[] }
+  const ensure = pid => (groups[pid] = groups[pid] || { artists: [], artworks: [], events: [], stories: [] });
   Object.values(graph.edges).forEach(e => {
     if (e.status !== "pending") return;
     if (e.type === "EXHIBITED_AT" && graph.artists[e.from]?.status === "pending") ensure(e.to).artists.push(graph.artists[e.from]);
     if (e.type === "DISPLAYED_AT" && graph.artworks[e.from]?.status === "pending") ensure(e.to).artworks.push(graph.artworks[e.from]);
     if (e.type === "MENTIONS" && graph.stories[e.from]?.status === "pending") ensure(e.to).stories.push(graph.stories[e.from]);
+    // HOSTS runs place -> event (the reverse direction of the others, which
+    // all point FROM the content node TO the place) — a place hosts an
+    // event, an event doesn't "point at" its venue the way an artwork does.
+    if (e.type === "HOSTS" && graph.events?.[e.to]?.status === "pending") ensure(e.from).events.push(graph.events[e.to]);
   });
   return groups;
 }
