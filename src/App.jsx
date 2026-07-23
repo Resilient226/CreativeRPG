@@ -1257,7 +1257,8 @@ export default function CreativeEmpireOS() {
       {selectedNode && (
         <NodeSheet node={selectedNode} onClose={() => setSelectedNode(null)}
           onLogInteraction={logInteraction} onTrack={trackOpportunity} onDismiss={dismissOpportunity}
-          onRequestDelete={requestDelete} onEdit={openEdit} onAddDetail={addDetailToNode} />
+          onRequestDelete={requestDelete} onEdit={openEdit} onAddDetail={addDetailToNode}
+          graph={graph} checkIns={checkIns} unlockedDiscoverables={unlockedDiscoverables} />
       )}
       {editingNode && (
         <EditSheet node={editingNode} form={editForm} setForm={setEditForm} onClose={closeEdit} onSave={saveEdit} />
@@ -3624,7 +3625,20 @@ function MapNodePin({ node, onClick }) {
 }
 
 /* ---- unified node detail sheet: switches on node.kind ---- */
-function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequestDelete, onEdit, onAddDetail }) {
+function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequestDelete, onEdit, onAddDetail, graph, checkIns, unlockedDiscoverables }) {
+  // Places get their own bespoke sheet matching the Discovery Flow mockup's
+  // visual language (near-black background, neon accent, white cards,
+  // badge/checkmark rows) — deliberately isolated from the generic sheet
+  // below so person/milestone/opportunity entities are completely
+  // unaffected by this redesign. Same real data throughout (checkIns,
+  // graph), nothing fabricated: sections with nothing real to show simply
+  // don't render, and the four collection-progress slots with no real
+  // tracking behind them yet (Photos/Audio/Timeline/Oral History) are shown
+  // honestly locked, not faked as complete.
+  if (node.kind === "place") {
+    return <PlaceDetailSheet node={node} onClose={onClose} onEdit={onEdit} onRequestDelete={onRequestDelete} onAddDetail={onAddDetail}
+      graph={graph || { artists: {}, artworks: {}, events: {}, stories: {}, edges: {} }} checkIns={checkIns || {}} unlockedDiscoverables={unlockedDiscoverables || {}} />;
+  }
   const Icon = node.icon;
   const editable = node.kind === "person" || node.kind === "place" || node.kind === "milestone";
   const deletable = editable;
@@ -3805,6 +3819,200 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
             </>
           )}
         </Scroll>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The Discovery Flow visual language: near-black background, a neon accent
+ * color, white/light content cards, pill badges, and a collection-progress
+ * icon row. This is a VISUAL rebuild only — every value shown is real data
+ * already tracked elsewhere in the app (checkIns, the knowledge graph);
+ * nothing here invents content that doesn't exist. Sections with nothing
+ * real to show simply don't render, rather than being padded out with
+ * placeholder text.
+ */
+const DISCOVERY_ACCENT = "#39FF7A"; // the mockup's neon green
+function PlaceDetailSheet({ node, onClose, onEdit, onRequestDelete, onAddDetail, graph, checkIns, unlockedDiscoverables }) {
+  const Icon = node.icon || PinIcon;
+  const visit = checkIns[node.id];
+  const visited = !!visit;
+
+  // Real graph lookups — same edge-traversal pattern as the rest of the app,
+  // just rendered in the new visual language. Only VERIFIED content shows
+  // here; anything still sitting in the review queue as "pending" is never
+  // shown to a player.
+  const funFacts = Object.values(graph.edges)
+    .filter(e => e.type === "MENTIONS" && e.to === node.id && e.status === "verified")
+    .map(e => graph.stories[e.from])
+    .filter(s => s && s.status === "verified" && s.type === "fact");
+  const profileStory = Object.values(graph.edges)
+    .filter(e => e.type === "MENTIONS" && e.to === node.id && e.status === "verified")
+    .map(e => graph.stories[e.from])
+    .find(s => s && s.status === "verified" && s.type === "profile");
+  const upcomingEvents = Object.values(graph.edges)
+    .filter(e => e.type === "HOSTS" && e.from === node.id && e.status === "verified")
+    .map(e => graph.events?.[e.to])
+    .filter(ev => ev && ev.status === "verified");
+  const linkedArtists = Object.values(graph.edges)
+    .filter(e => e.type === "EXHIBITED_AT" && e.to === node.id && e.status === "verified")
+    .map(e => graph.artists[e.from])
+    .filter(Boolean);
+  const linkedArtworks = Object.values(graph.edges)
+    .filter(e => e.type === "DISPLAYED_AT" && e.to === node.id && e.status === "verified")
+    .map(e => graph.artworks[e.from])
+    .filter(Boolean);
+
+  // Collection-progress row: the first three reflect real tracked state.
+  // The last four are shown honestly LOCKED — those categories (Photos,
+  // Audio, Timeline, Oral History) aren't tracked anywhere in the app yet,
+  // so showing them as complete would be fabricating progress that isn't
+  // real. This is a visual-language match, not a data-completeness claim.
+  const progressSlots = [
+    { key: "visited", label: "Visited", done: visited },
+    { key: "story", label: "Story", done: visited && (funFacts.length > 0 || !!profileStory) },
+    { key: "artist", label: "Artist", done: visited && linkedArtists.length > 0 },
+    { key: "photos", label: "Photos", done: false, locked: true },
+    { key: "audio", label: "Audio", done: false, locked: true },
+    { key: "timeline", label: "Timeline", done: false, locked: true },
+    { key: "oral", label: "Oral History", done: false, locked: true },
+  ];
+
+  const Badge = ({ children, tone = "default" }) => (
+    <span style={{
+      display: "inline-block", padding: "4px 11px", borderRadius: 20, fontFamily: head, fontSize: 10.5, fontWeight: 700,
+      background: tone === "accent" ? DISCOVERY_ACCENT : "#ffffff14",
+      color: tone === "accent" ? "#0A0A0A" : "#EDEDED",
+      border: tone === "accent" ? "none" : "1px solid #ffffff22",
+    }}>{children}</span>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#000000d0", zIndex: 95, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, maxHeight: "88vh", overflow: "auto",
+        background: "#0A0A0A", borderTopLeftRadius: 22, borderTopRightRadius: 22, border: "1px solid #ffffff14", borderBottom: "none" }}>
+
+        {/* Header: photo-style hero panel. No real per-place photo asset
+            exists yet, so this is a dark gradient icon panel — same
+            treatment the mockup's photo header gives, honestly standing in
+            for a photo the app doesn't have. */}
+        <div style={{ position: "relative", height: 150, background: `linear-gradient(160deg, ${node.color || "#333"}33, #0A0A0A 85%)`,
+          borderTopLeftRadius: 22, borderTopRightRadius: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Icon size={44} color={node.color || DISCOVERY_ACCENT} style={{ opacity: 0.85 }} />
+          <button onClick={onClose} style={{ position: "absolute", top: 14, left: 14, width: 32, height: 32, borderRadius: "50%",
+            background: "#00000066", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <X size={16} color="#fff" />
+          </button>
+          <div style={{ position: "absolute", top: 14, right: 14, display: "flex", gap: 6 }}>
+            <button onClick={() => onEdit(node)} style={{ width: 32, height: 32, borderRadius: "50%", background: "#00000066", border: "none",
+              display: "flex", alignItems: "center", justifyContent: "center" }}><Edit3 size={14} color="#fff" /></button>
+            <button onClick={() => onRequestDelete(node)} style={{ width: 32, height: 32, borderRadius: "50%", background: "#00000066", border: "none",
+              display: "flex", alignItems: "center", justifyContent: "center" }}><Trash2 size={14} color="#ff6b6b" /></button>
+          </div>
+        </div>
+
+        <div style={{ padding: "16px 18px 26px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 19, color: "#fff" }}>{node.name}</div>
+            <Star size={18} color={DISCOVERY_ACCENT} />
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+            {node.category && <Badge tone="accent">{node.category}</Badge>}
+            {node.neighborhood && (
+              <span style={{ fontFamily: body, fontSize: 11, color: "#9a9a9a", display: "flex", alignItems: "center", gap: 3 }}>
+                <PinIcon size={11} /> {node.neighborhood}
+              </span>
+            )}
+          </div>
+
+          {/* Visited row — real, from checkIns; the arrival loop is what
+              actually writes this, this just displays it. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 12 }}>
+            <div style={{ width: 20, height: 20, borderRadius: "50%", background: visited ? DISCOVERY_ACCENT : "#ffffff18",
+              display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {visited ? <Check size={13} color="#0A0A0A" /> : <Lock size={11} color="#666" />}
+            </div>
+            <span style={{ fontFamily: body, fontSize: 12.5, color: visited ? "#EDEDED" : "#777" }}>
+              {visited ? `Visited · ${new Date(visit.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "Not yet visited"}
+            </span>
+          </div>
+
+          {/* About — profile-type story if research found one, falling back
+              to whatever note/description the place already had. */}
+          {(profileStory?.body || node.note) && (
+            <>
+              <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#777", marginTop: 18 }}>ABOUT</div>
+              <div style={{ fontFamily: body, fontSize: 13, color: "#cfcfcf", marginTop: 5, lineHeight: 1.55 }}>{profileStory?.body || node.note}</div>
+            </>
+          )}
+
+          {/* Fun Facts — only renders if research actually found and you
+              approved at least one; never padded with placeholder text. */}
+          {funFacts.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#777", display: "flex", alignItems: "center", gap: 5 }}>
+                <Sparkles size={11} color={DISCOVERY_ACCENT} /> FUN FACTS
+              </div>
+              {funFacts.map(f => (
+                <div key={f.id} style={{ fontFamily: body, fontSize: 12.5, color: "#cfcfcf", marginTop: 6, lineHeight: 1.5,
+                  background: "#ffffff0a", borderRadius: 10, padding: "8px 10px" }}>{f.body}</div>
+              ))}
+            </div>
+          )}
+
+          {/* Upcoming Events — only real, verified, dated events. */}
+          {upcomingEvents.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#777", display: "flex", alignItems: "center", gap: 5 }}>
+                <Calendar size={11} color={DISCOVERY_ACCENT} /> UPCOMING EVENTS
+              </div>
+              {upcomingEvents.map(ev => (
+                <div key={ev.id} style={{ marginTop: 6, background: "#ffffff0a", borderRadius: 10, padding: "8px 10px" }}>
+                  <div style={{ fontFamily: head, fontSize: 12, color: "#fff", fontWeight: 700 }}>{ev.title}</div>
+                  {ev.date && <div style={{ fontFamily: body, fontSize: 10.5, color: DISCOVERY_ACCENT, marginTop: 1 }}>{ev.date}</div>}
+                  {ev.description && <div style={{ fontFamily: body, fontSize: 11.5, color: "#a8a8a8", marginTop: 3, lineHeight: 1.4 }}>{ev.description}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Artists/Artworks — same real edge data as the review queue,
+              just player-facing now instead of admin-facing. */}
+          {linkedArtists.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#777" }}>ARTISTS FEATURED HERE</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                {linkedArtists.map(a => <Badge key={a.id}>{a.name}</Badge>)}
+              </div>
+            </div>
+          )}
+          {linkedArtworks.length > 0 && (
+            <div style={{ fontFamily: body, fontSize: 11, color: "#8a8a8a", marginTop: 6 }}>{linkedArtworks.length} artwork{linkedArtworks.length === 1 ? "" : "s"} documented here</div>
+          )}
+
+          {/* Collection Progress footer — the mockup's icon-circle row.
+              First three reflect real state; the rest are shown genuinely
+              locked, since those categories aren't tracked anywhere yet —
+              an honest "not built" rather than invented completion. */}
+          <div style={{ marginTop: 22, paddingTop: 16, borderTop: "1px solid #ffffff14" }}>
+            <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: "#777", marginBottom: 10 }}>COLLECTION PROGRESS</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {progressSlots.map(slot => (
+                <div key={slot.key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, width: 52 }}>
+                  <div style={{ width: 34, height: 34, borderRadius: "50%",
+                    background: slot.done ? DISCOVERY_ACCENT : "#ffffff10",
+                    display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {slot.done ? <CheckCircle2 size={17} color="#0A0A0A" /> : <Lock size={13} color="#555" />}
+                  </div>
+                  <div style={{ fontFamily: body, fontSize: 8.5, color: slot.done ? "#cfcfcf" : "#666", textAlign: "center" }}>{slot.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <DetailsLog log={node.detailsLog} onAdd={text => onAddDetail(node, text)} />
+        </div>
       </div>
     </div>
   );
