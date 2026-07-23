@@ -2003,10 +2003,15 @@ function WorldBuilderReviewQueue({ graph, onApprove, onReject, onEditField, plac
       {placeIds.map(pid => (
         <div key={pid} style={{ marginBottom: 10 }}>
           <div style={{ fontFamily: head, fontSize: 11.5, color: "#D9A441", fontWeight: 700 }}>{placeNameById[pid] || pid}</div>
-          {groups[pid].artists.map(a => <SuggestionCard key={a.id} kind="artist" item={a} />)}
-          {groups[pid].artworks.map(a => <SuggestionCard key={a.id} kind="artwork" item={a} />)}
-          {groups[pid].events.map(e => <SuggestionCard key={e.id} kind="event" item={e} />)}
-          {groups[pid].stories.map(s => <SuggestionCard key={s.id} kind="story" item={s} />)}
+          {/* Defensive fallbacks (|| []): if App.jsx and knowledgeGraphEngine.js
+              are ever ONE VERSION APART — e.g. an older engine file uploaded
+              alongside a newer App.jsx that expects an events bucket the old
+              pendingByPlace() didn't produce — this must degrade to "missing
+              section," never crash the whole panel. */}
+          {(groups[pid].artists || []).map(a => <SuggestionCard key={a.id} kind="artist" item={a} />)}
+          {(groups[pid].artworks || []).map(a => <SuggestionCard key={a.id} kind="artwork" item={a} />)}
+          {(groups[pid].events || []).map(e => <SuggestionCard key={e.id} kind="event" item={e} />)}
+          {(groups[pid].stories || []).map(s => <SuggestionCard key={s.id} kind="story" item={s} />)}
         </div>
       ))}
     </div>
