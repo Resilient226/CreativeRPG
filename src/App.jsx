@@ -2091,17 +2091,14 @@ function isNightNow() {
 }
 
 const ART_DISTRICT_PALETTE = {
-  // Roads moved from warm tan to dark asphalt per the visual polish sprint —
-  // "roads should feel like places to walk, not lines on a map." The warm gold
-  // identity survives in the sidewalk bands and lane markings instead of the
-  // road surface itself, so streets read as real streets while the world keeps
-  // its premium gold-on-navy character.
-  night: { bg: "#1B3A5C", building: "#c9a878", road: "#2F333B", roadMinor: "#3A3E47", sidewalk: "#8A8065", laneMarking: "#E8D9A8", water: "#123c3a", land: "#7d9678", label: "#f0dcae", halo: "#0a0a0a" },
-  // Day ground is warm sand, NOT sky blue — painting the ground the same color
-  // as the sky made the whole city read as floating. Warm ground + asphalt
-  // streets + cream buildings gives the golden-hour contrast from the concept
-  // art: streets clearly darker than ground, buildings clearly lighter.
-  day: { bg: "#CFC5AC", building: "#EAD9B8", road: "#3D424C", roadMinor: "#484D58", sidewalk: "#B0A487", laneMarking: "#F5E7B8", water: "#3F7E8C", land: "#9DBA8C", label: "#3a2a1a", halo: "#fff8ea" },
+  // TOY-CITY kit (replaces the golden-hour gold-on-navy scheme). This is the
+  // flat, pale base the soft-3D toy buildings sit on: near-white warm ground,
+  // pale grey roads (no more dark asphalt — toy roads are light ribbons),
+  // soft mint parks, sky-teal water, soft neutral building fills. Night is
+  // only a gently dimmed version of the same pale kit, never a dark scene,
+  // so the toy-world feel survives after sunset.
+  night: { bg: "#B7C8DC", building: "#C9C1B0", road: "#BFB9AD", roadMinor: "#C8C2B6", sidewalk: "#D5CFC3", laneMarking: "#EDE8DC", water: "#8FB9C6", land: "#DDE3D0", label: "#4a5568", halo: "#ffffff" },
+  day: { bg: "#E4EEF7", building: "#E8E2D6", road: "#D8D2C6", roadMinor: "#E0DACE", sidewalk: "#EDE8DC", laneMarking: "#FBF7EE", water: "#A6D4E0", land: "#F4F1EA", label: "#5a6472", halo: "#ffffff" },
 };
 // Non-interactive buildings sit back at partial opacity so real entity locations
 // naturally draw the eye — this is the actual mechanism behind "important places
@@ -2384,22 +2381,30 @@ function createBuildingModelsLayer() {
       this.camera = new THREE.Camera();
       this.scene = new THREE.Scene();
       this.clock = new THREE.Clock(); // drives the player robot's walk-cycle mixer
-      // Golden-hour rig: warm sky light with cool navy bounce from below,
-      // plus a low warm sun from the west that casts REAL soft shadows.
-      this.scene.add(new THREE.HemisphereLight(0xffe0b8, 0x2b3550, 0.55));
-      this.scene.add(new THREE.AmbientLight(0xfff0dd, 0.45));
-      const sun = new THREE.DirectionalLight(0xffb36b, 1.15);
-      sun.position.set(-180, -60, 130); // low in the west — long evening shadows
+      // TOY-CITY studio rig (replaces the old golden-hour sunset rig). The
+      // look we're after is "a physical model city photographed under soft
+      // studio softboxes," not cinematic dusk. That means: a bright, fairly
+      // NEUTRAL sky fill from above with a gentle cool ground bounce (so
+      // nothing is dramatically warm/orange), high overall ambient so the
+      // matte clay reads evenly, and a single SOFT, near-white key from
+      // high up rather than low from the west — giving short, soft shadows
+      // instead of long dramatic ones. Higher shadow-map res + a tighter
+      // frustum keeps those soft shadows clean at the toy scale.
+      this.scene.add(new THREE.HemisphereLight(0xffffff, 0xdfe8f0, 0.85));
+      this.scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+      const sun = new THREE.DirectionalLight(0xfff6ec, 0.9);
+      sun.position.set(-70, -50, 200); // high overhead, slightly to one side — soft short shadows, not long evening ones
       sun.castShadow = true;
-      sun.shadow.mapSize.set(1024, 1024);
-      Object.assign(sun.shadow.camera, { left: -300, right: 300, top: 300, bottom: -300, near: 1, far: 900 });
+      sun.shadow.mapSize.set(2048, 2048);
+      sun.shadow.radius = 6; // soft, blurry shadow edges — the claymation "big softbox" feel
+      Object.assign(sun.shadow.camera, { left: -260, right: 260, top: 260, bottom: -260, near: 1, far: 900 });
       this.scene.add(sun); this.scene.add(sun.target);
       this.sun = sun;
       // Invisible shadow-catcher: the map itself can't receive three.js
       // shadows, so this transparent plane rides along at ground level and
-      // catches the robot's and buildings' shadows — the single biggest
-      // "it's really standing there" grounding cue.
-      const catcher = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), new THREE.ShadowMaterial({ opacity: 0.25 }));
+      // catches the robot's and buildings' shadows. Lower opacity than the
+      // old rig — soft toy shadows are gentle, not grounding-heavy.
+      const catcher = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), new THREE.ShadowMaterial({ opacity: 0.15 }));
       catcher.receiveShadow = true;
       catcher.position.z = 0.05;
       this.scene.add(catcher);
@@ -2710,7 +2715,7 @@ function createBuildingModelsLayer() {
       // the player — otherwise shadows silently stop working once you walk a
       // few hundred meters from wherever the layer first initialized.
       if (this.sun) {
-        this.sun.position.set(local.x - 180, local.y - 60, 130);
+        this.sun.position.set(local.x - 70, local.y - 50, 200);
         this.sun.target.position.set(local.x, local.y, 0);
       }
       if (this.shadowGround) this.shadowGround.position.set(local.x, local.y, 0.05);
@@ -2867,7 +2872,7 @@ function applyAtmosphere(map, night) {
     map.setSky({
       "sky-color": sky.zenith,
       "horizon-color": sky.horizon,
-      "fog-color": night ? "#1B3A5C" : "#CFC5AC",
+      "fog-color": night ? "#B7C8DC" : "#E4EEF7",
       "sky-horizon-blend": 0.6,
       "horizon-fog-blend": 0.5,
       "fog-ground-blend": 0.35,
@@ -2877,14 +2882,17 @@ function applyAtmosphere(map, night) {
 }
 
 /**
- * These colors are sampled directly from the actual uploaded skybox images (Kenney's
- * "Skyboxes" pack), not estimated — zenith and horizon bands averaged from the real
- * PNGs.
+ * TOY-CITY sky (replaces the realistic Kenney-skybox-sampled palette). The
+ * claymation look wants a soft, pale, powder-blue sky that stays bright and
+ * clean rather than swinging through dramatic sunrise/sunset color. Day is
+ * the signature powder blue; morning is only a touch warmer and night only
+ * a touch deeper/dusky — deliberately NOT a dark night sky, because a
+ * black sky would break the bright toy-world feel the moment the sun sets.
  */
 const SKY_PALETTE = {
-  morning: { horizon: "#f4cdb5", zenith: "#fdedd6" },
-  day: { horizon: "#a7bbf2", zenith: "#98bdf0" },
-  night: { horizon: "#28335d", zenith: "#2e3c6f" },
+  morning: { horizon: "#E4EEF7", zenith: "#D2E4F5" },
+  day: { horizon: "#EAF3FB", zenith: "#CFE4F5" },
+  night: { horizon: "#B7C8DC", zenith: "#9FB6D2" },
 };
 
 /** Morning/day/night — a real, slightly finer-grained time check than the plain
