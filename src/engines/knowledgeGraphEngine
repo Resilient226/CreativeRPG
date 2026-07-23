@@ -185,23 +185,35 @@ export function nearbyPlaceIds(graph, placeId) {
 
 /**
  * Builds the {system, user} prompt for researching one Creative Place.
- * Deliberately conservative: told to return ONLY high-confidence, well-known
- * facts and to say so explicitly when uncertain, specifically because this
- * app's backend model (Groq/Llama) has no live web search wired in (see
- * api/model.js's useSearch no-op) — without that guard, a small real-world
- * venue the model doesn't actually know about would likely get plausible-
- * sounding, fabricated artists/artworks rather than an honest "not sure."
+ * Deliberately conservative: told to extract facts ONLY from the search
+ * results it's given, and to say so explicitly when the results don't
+ * support a confident fact — never to fill gaps from general "knowledge" of
+ * similar venues. Search (via Tavily, see api/search.js) now happens as its
+ * OWN step before this prompt is ever built, specifically so sourceNote can
+ * be a REAL source URL instead of the model's own unverifiable claim about
+ * why it believes something — a small real venue with real GPS coordinates
+ * deserves an honest "we found nothing" over invented content.
  */
-export function buildResearchPrompt(place) {
-  const system = `You are researching a real, physical creative venue for a location-based game. Only return facts you have genuine, specific knowledge of. If you are not confident a fact is real and specific to THIS exact venue, omit it entirely rather than guessing or generalizing from similar venues. Respond with ONLY a JSON object, no prose, no markdown fences, matching exactly:
+export function buildResearchPrompt(place, searchResults = []) {
+  const system = `You are extracting structured facts about a real, physical creative venue from search results, for a location-based game. Use ONLY the information in the search results provided below — do not add anything from general knowledge, and do not generalize from similar venues. If the search results don't clearly support a fact about THIS exact venue, omit it. Respond with ONLY a JSON object, no prose, no markdown fences, matching exactly:
 {
-  "artists": [{ "name": string, "bio": string, "confidence": "high"|"low", "sourceNote": string }],
-  "artworks": [{ "title": string, "description": string, "artistName": string|null, "confidence": "high"|"low", "sourceNote": string }],
-  "history": { "body": string, "confidence": "high"|"low", "sourceNote": string } | null
+  "artists": [{ "name": string, "bio": string, "sourceUrl": string }],
+  "artworks": [{ "title": string, "description": string, "artistName": string|null, "sourceUrl": string }],
+  "history": { "body": string, "sourceUrl": string } | null
 }
-"sourceNote" must describe WHY you believe this (e.g. "widely known gallery opening announced 2023", not a fabricated citation). If you have no genuine, specific knowledge of this venue at all, return { "artists": [], "artworks": [], "history": null } — an empty, honest result is far better than invented content for a real place with real GPS coordinates.`;
-  const user = `Venue: "${place.name}"\nCategory: ${place.category || "unknown"}\nLocation: ${place.address || `${place.lat}, ${place.lng}`}\nNeighborhood: ${place.neighborhood || "Castleberry Hill, Atlanta"}`;
+"sourceUrl" MUST be one of the exact URLs given below — never invent or paraphrase a URL. If the search results contain nothing specific and confident about this venue, return { "artists": [], "artworks": [], "history": null } — an empty, honest result is far better than invented content.`;
+  const sourcesBlock = searchResults.length
+    ? searchResults.map((r, i) => `[Source ${i + 1}] ${r.url}\n${r.title}\n${r.content}`).join("\n\n")
+    : "(no search results were found for this venue)";
+  const user = `Venue: "${place.name}"\nCategory: ${place.category || "unknown"}\nLocation: ${place.address || `${place.lat}, ${place.lng}`}\nNeighborhood: ${place.neighborhood || "Castleberry Hill, Atlanta"}\n\nSearch results:\n${sourcesBlock}`;
   return { system, user };
+}
+
+/** Builds the search query the research flow runs BEFORE calling the AI —
+ *  scoped to the venue's real name/address so results are actually about
+ *  this specific place, not the category in general. */
+export function buildResearchQuery(place) {
+  return `"${place.name}" ${place.address || ""} gallery mural artist Atlanta`.trim();
 }
 
 /** Turns the parsed AI JSON into pending graph nodes+edges, tagged for
@@ -215,31 +227,22 @@ export function suggestionsToGraphDelta(parsed, placeId) {
   const artistIdByName = {};
 
   for (const a of parsed.artists || []) {
-    const node = makeArtistNode({
-      name: a.name, bio: a.bio || "", suggestedBy: "ai",
-      sourceNote: a.confidence === "low" ? `${a.sourceNote} (unverified — low confidence)` : a.sourceNote,
-    });
+    const node = makeArtistNode({ name: a.name, bio: a.bio || "", suggestedBy: "ai", sourceNote: a.sourceUrl || "" });
     artists.push(node);
     artistIdByName[a.name] = node.id;
-    edges.push(makeEdge({ type: "EXHIBITED_AT", from: node.id, to: placeId, suggestedBy: "ai", sourceNote: a.sourceNote }));
+    edges.push(makeEdge({ type: "EXHIBITED_AT", from: node.id, to: placeId, suggestedBy: "ai", sourceNote: a.sourceUrl || "" }));
   }
   for (const w of parsed.artworks || []) {
-    const node = makeArtworkNode({
-      title: w.title, description: w.description || "", suggestedBy: "ai",
-      sourceNote: w.confidence === "low" ? `${w.sourceNote} (unverified — low confidence)` : w.sourceNote,
-    });
+    const node = makeArtworkNode({ title: w.title, description: w.description || "", suggestedBy: "ai", sourceNote: w.sourceUrl || "" });
     artworks.push(node);
-    edges.push(makeEdge({ type: "DISPLAYED_AT", from: node.id, to: placeId, suggestedBy: "ai", sourceNote: w.sourceNote }));
+    edges.push(makeEdge({ type: "DISPLAYED_AT", from: node.id, to: placeId, suggestedBy: "ai", sourceNote: w.sourceUrl || "" }));
     const artistId = w.artistName && artistIdByName[w.artistName];
-    if (artistId) edges.push(makeEdge({ type: "CREATED_BY", from: node.id, to: artistId, suggestedBy: "ai", sourceNote: w.sourceNote }));
+    if (artistId) edges.push(makeEdge({ type: "CREATED_BY", from: node.id, to: artistId, suggestedBy: "ai", sourceNote: w.sourceUrl || "" }));
   }
   const stories = [];
   if (parsed.history && parsed.history.body) {
-    stories.push(makeStoryNode({
-      title: `History`, body: parsed.history.body, suggestedBy: "ai",
-      sourceNote: parsed.history.confidence === "low" ? `${parsed.history.sourceNote} (unverified — low confidence)` : parsed.history.sourceNote,
-    }));
-    edges.push(makeEdge({ type: "MENTIONS", from: stories[0].id, to: placeId, suggestedBy: "ai", sourceNote: parsed.history.sourceNote }));
+    stories.push(makeStoryNode({ title: `History`, body: parsed.history.body, suggestedBy: "ai", sourceNote: parsed.history.sourceUrl || "" }));
+    edges.push(makeEdge({ type: "MENTIONS", from: stories[0].id, to: placeId, suggestedBy: "ai", sourceNote: parsed.history.sourceUrl || "" }));
   }
   return { artists, artworks, stories, edges };
 }
