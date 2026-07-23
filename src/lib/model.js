@@ -2,7 +2,7 @@
 // Signature mirrors the artifact's `anthropicRequest` so the existing app component
 // ports with a find/replace: fetch("https://api.anthropic.com/...") -> callModel(...).
 
-export async function callModel({ system, messages, maxTokens = 1500, useSearch = false }) {
+export async function callModel({ system, messages, maxTokens = 1500, useSearch = false } = {}) {
   const r = await fetch("/api/model", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -13,6 +13,25 @@ export async function callModel({ system, messages, maxTokens = 1500, useSearch 
     throw new Error(json?.error?.message || `Request failed (${r.status})`);
   }
   return json; // { data, usedSearch }
+}
+
+// Real web search, backed by Tavily (see api/search.js) — a separate call
+// from callModel(), deliberately. This is the search half of splitting
+// "find real facts" and "summarize them" into two independently-quota'd
+// free services, rather than one bundled provider tool. Callers that need
+// grounded facts should call this FIRST, then hand the results to
+// callModel() as plain context in the prompt.
+export async function searchWeb(query, maxResults = 5) {
+  const r = await fetch("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, maxResults }),
+  });
+  const json = await r.json();
+  if (!r.ok || json.error) {
+    throw new Error(json?.error?.message || `Search failed (${r.status})`);
+  }
+  return json.results; // [{ title, url, content }]
 }
 
 // Same JSON-extraction helpers the app already relies on, re-exported here so the
