@@ -34,12 +34,17 @@ import {
 
 /* ---------------- storybook design tokens ---------------- */
 const T = {
-  ink: "#1B140D", panel: "#241A10", wood: "#6B4A2B", woodLight: "#8A6238",
-  parchment: "#EDDBB0", parchmentDark: "#E2C98C", cream: "#F6ECD2",
-  gold: "#D9A441", goldBright: "#F0C25E",
-  textDark: "#3B2A18", textCream: "#F3E7C9", textMuted: "#B79A6E",
-  green: "#5BA85A", blue: "#3B6EA5", purple: "#6A4C93", rose: "#C0392B",
-  sky: "#8FCBEA", river: "#4FA3D1", forest: "#3F6B3A", forestLight: "#4F7F49",
+  // Every token NAME below is unchanged — well over a hundred call sites
+  // across every screen already reference T.xxx, so rewriting what these
+  // values ARE (light card surfaces → dark, dark text → light, warm gold →
+  // neon green) reskins the whole app from one place, safely, instead of
+  // hand-editing every individual usage site across a ~4700-line file.
+  ink: "#0A0A0A", panel: "#141414", wood: "#242424", woodLight: "#333333",
+  parchment: "#161616", parchmentDark: "#0e0e0e", cream: "#1a1a1a",
+  gold: "#39FF7A", goldBright: "#5CFF95",
+  textDark: "#F2F2F2", textCream: "#FFFFFF", textMuted: "#9a9a9a",
+  green: "#4ADE80", blue: "#5B9BFF", purple: "#B98CFF", rose: "#FF6B81",
+  sky: "#243038", river: "#1f3a42", forest: "#1c2b1e", forestLight: "#26392a",
 };
 const head = "'Baloo 2', system-ui, sans-serif";
 const body = "'Nunito', system-ui, sans-serif";
@@ -1133,25 +1138,25 @@ export default function CreativeEmpireOS() {
           visible so there's always a reason to walk somewhere today. */}
       {tab === "map" && !worldBuilderActive && !arrival && (
         <div style={{ position: "fixed", top: "calc(14px + env(safe-area-inset-top, 0px))", left: "50%",
-          transform: "translateX(-50%)", zIndex: 45, background: "#1a1420ee", border: "1px solid #D9A44155",
+          transform: "translateX(-50%)", zIndex: 45, background: "#0A0A0Aee", border: "1px solid #39FF7A44",
           borderRadius: 16, padding: "8px 14px", minWidth: 190, backdropFilter: "blur(8px)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <span style={{ fontFamily: body, fontSize: 10, letterSpacing: 1, color: "#D9A441", fontWeight: 700 }}>
+            <span style={{ fontFamily: body, fontSize: 10, letterSpacing: 1, color: "#39FF7A", fontWeight: 700 }}>
               DAILY QUEST
             </span>
             {streak.count > 0 && (
-              <span style={{ fontFamily: body, fontSize: 11, color: "#f0dcae" }}>🔥 {streak.count}</span>
+              <span style={{ fontFamily: body, fontSize: 11, color: "#fff" }}>🔥 {streak.count}</span>
             )}
           </div>
           <div style={{ fontFamily: body, fontSize: 12, color: "#fff", marginTop: 2 }}>
             Discover {DAILY_DISCOVERY_TARGET} places
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
-            <div style={{ flex: 1, height: 5, borderRadius: 3, background: "#ffffff22", overflow: "hidden" }}>
+            <div style={{ flex: 1, height: 5, borderRadius: 3, background: "#ffffff1a", overflow: "hidden" }}>
               <div style={{ width: `${Math.min(100, (todayDiscoveries / DAILY_DISCOVERY_TARGET) * 100)}%`, height: "100%",
-                background: todayDiscoveries >= DAILY_DISCOVERY_TARGET ? "#5BD9B0" : "#D9A441", transition: "width 0.4s ease" }} />
+                background: "#39FF7A", transition: "width 0.4s ease" }} />
             </div>
-            <span style={{ fontFamily: body, fontSize: 11, color: "#cbbfd6" }}>
+            <span style={{ fontFamily: body, fontSize: 11, color: "#9a9a9a" }}>
               {Math.min(todayDiscoveries, DAILY_DISCOVERY_TARGET)}/{DAILY_DISCOVERY_TARGET}
             </span>
           </div>
@@ -1159,8 +1164,8 @@ export default function CreativeEmpireOS() {
       )}
       {tab === "map" && nextDiscovery && !arrival && !worldBuilderActive && (
         <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 150, zIndex: 45,
-          background: "#1a1420ee", border: "1px solid #D9A44166", borderRadius: 22, padding: "8px 16px",
-          color: "#f0dcae", fontFamily: body, fontSize: 13, display: "flex", gap: 8, alignItems: "center",
+          background: "#0A0A0Aee", border: "1px solid #39FF7A55", borderRadius: 22, padding: "8px 16px",
+          color: "#fff", fontFamily: body, fontSize: 13, display: "flex", gap: 8, alignItems: "center",
           boxShadow: "0 4px 14px #0008", whiteSpace: "nowrap", maxWidth: "88%", overflow: "hidden" }}>
           <span>🧭</span>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -1172,50 +1177,50 @@ export default function CreativeEmpireOS() {
       {/* ARRIVAL IS THE PAYOFF — the card that guarantees "you arrived and
           something happened." XP, collection progress, and the next pull. */}
       {arrival && (
-        <div onClick={() => setArrival(null)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "#00000088",
+        <div onClick={() => setArrival(null)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "#000000a0",
           display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480,
-            background: "linear-gradient(180deg,#241a2e,#171020)", borderRadius: "22px 22px 0 0",
-            padding: "22px 20px 30px", color: "#fff", fontFamily: body, borderTop: "2px solid #D9A441" }}>
+            background: "#0A0A0A", borderRadius: "22px 22px 0 0",
+            padding: "22px 20px 30px", color: "#fff", fontFamily: body, borderTop: "2px solid #39FF7A" }}>
             <div style={{ fontSize: 36, textAlign: "center" }}>{(CATEGORY_MARKER_STYLE[arrival.category] || {}).emoji || "📍"}</div>
-            <div style={{ textAlign: "center", fontSize: 12, letterSpacing: 2, color: "#D9A441", marginTop: 6, fontWeight: 700 }}>
+            <div style={{ textAlign: "center", fontSize: 12, letterSpacing: 2, color: "#39FF7A", marginTop: 6, fontWeight: 700 }}>
               {arrival.first ? "NEW DISCOVERY" : "WELCOME BACK"}
             </div>
             <div style={{ textAlign: "center", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{arrival.name}</div>
             {arrival.story && (
-              <div style={{ fontSize: 13, color: "#cbbfd6", marginTop: 10, textAlign: "center", lineHeight: 1.5 }}>{arrival.story}</div>
+              <div style={{ fontSize: 13, color: "#b8b8b8", marginTop: 10, textAlign: "center", lineHeight: 1.5 }}>{arrival.story}</div>
             )}
             {/* A Creative Place can hold several discoverables — surfacing all of
                 them here (not just "you visited a place") is the whole point of
                 the artwork/artist layer: one arrival, several unlocks. */}
             {arrival.discoverables && arrival.discoverables.length > 0 && (
-              <div style={{ marginTop: 12, background: "#00000033", borderRadius: 12, padding: "10px 12px" }}>
-                <div style={{ fontSize: 10, letterSpacing: 1, color: "#5BD9B0", fontWeight: 700, marginBottom: 6 }}>
+              <div style={{ marginTop: 12, background: "#ffffff0a", borderRadius: 12, padding: "10px 12px" }}>
+                <div style={{ fontSize: 10, letterSpacing: 1, color: "#39FF7A", fontWeight: 700, marginBottom: 6 }}>
                   {arrival.discoverables.length} DISCOVERY{arrival.discoverables.length === 1 ? "" : "IES"} UNLOCKED
                 </div>
                 {arrival.discoverables.map((d, i) => (
                   <div key={i} style={{ fontSize: 13, color: "#fff", marginTop: i ? 6 : 0 }}>
-                    <span style={{ color: "#5BD9B0" }}>✦</span> {d.title}
+                    <span style={{ color: "#39FF7A" }}>✦</span> {d.title}
                   </div>
                 ))}
               </div>
             )}
             <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 14, fontSize: 13 }}>
-              <span style={{ color: "#5BD9B0", fontWeight: 700 }}>+{arrival.xpGained} XP</span>
-              <span style={{ color: "#cbbfd6" }}>{heroStats.discovered}/{heroStats.total} places discovered</span>
+              <span style={{ color: "#39FF7A", fontWeight: 700 }}>+{arrival.xpGained} XP</span>
+              <span style={{ color: "#9a9a9a" }}>{heroStats.discovered}/{heroStats.total} places discovered</span>
             </div>
             {activeTour && graph.tours[activeTour.tourId] && (
-              <div style={{ textAlign: "center", marginTop: 10, fontSize: 12, color: "#D9A441" }}>
+              <div style={{ textAlign: "center", marginTop: 10, fontSize: 12, color: "#39FF7A" }}>
                 🏛️ {graph.tours[activeTour.tourId].name} — stop {Math.min(activeTour.legIndex + 1, graph.tours[activeTour.tourId].stops.length)}/{graph.tours[activeTour.tourId].stops.length}
               </div>
             )}
             {nextDiscovery && (
-              <div style={{ textAlign: "center", marginTop: 12, fontSize: 13, color: "#f0dcae" }}>
+              <div style={{ textAlign: "center", marginTop: 12, fontSize: 13, color: "#ccc" }}>
                 Next: <b>{nextDiscovery.node.name}</b> · {nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
               </div>
             )}
             <button onClick={() => setArrival(null)} style={{ marginTop: 16, width: "100%", padding: "13px 0",
-              borderRadius: 14, border: "none", background: "#D9A441", color: "#1a1420", fontWeight: 700, fontSize: 15 }}>
+              borderRadius: 14, border: "none", background: "#39FF7A", color: "#0A0A0A", fontWeight: 700, fontSize: 15 }}>
               Keep exploring
             </button>
           </div>
@@ -1788,9 +1793,9 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
       {worldBuilderActive && (
         <>
           <div style={{ position: "absolute", top: "calc(60px + env(safe-area-inset-top, 0px))", left: 10, right: 10,
-            background: "#D9A441", borderRadius: 10, padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontFamily: head, fontWeight: 800, fontSize: 11.5, color: "#1B140D" }}>🛠 WORLD BUILDER — FREE ROAM</span>
-            <button onClick={onExitWorldBuilder} style={{ background: "#1B140D", color: "#D9A441", border: "none",
+            background: "#39FF7A", borderRadius: 10, padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontFamily: head, fontWeight: 800, fontSize: 11.5, color: "#0A0A0A" }}>🛠 WORLD BUILDER — FREE ROAM</span>
+            <button onClick={onExitWorldBuilder} style={{ background: "#0A0A0A", color: "#39FF7A", border: "none",
               borderRadius: 6, padding: "3px 9px", fontFamily: head, fontWeight: 700, fontSize: 10.5 }}>EXIT</button>
           </div>
 
@@ -1817,7 +1822,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
                 {wbJumpBusy ? "Finding address…" : "Jump Here"}
               </button>
 
-              <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#D9A441", marginBottom: 5 }}>ADD REAL LOCATION</div>
+              <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#39FF7A", marginBottom: 5 }}>ADD REAL LOCATION</div>
               <input value={wbName} onChange={e => setWbName(e.target.value)} placeholder="Name (e.g. Nina Baldwin Gallery)"
                 style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
                   color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 6 }} />
@@ -1825,7 +1830,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
                 style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
                   color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 8 }} />
               <button onClick={publishLocation} disabled={wbBusy} style={{ width: "100%", padding: 10, borderRadius: 8, border: "none",
-                background: wbBusy ? "#6b5a2e" : "#D9A441", color: "#1B140D", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>
+                background: wbBusy ? "#2a3d2e" : "#39FF7A", color: "#0A0A0A", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>
                 {wbBusy ? "Geocoding real address…" : "Publish"}
               </button>
               {wbMsg && <div style={{ fontFamily: body, fontSize: 11, color: "#fff", marginTop: 6 }}>{wbMsg}</div>}
