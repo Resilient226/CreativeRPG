@@ -351,7 +351,7 @@ export default function CreativeEmpireOS() {
   // themselves stay wherever they already lived (World Builder's places
   // list) — the graph only adds relationships ON TOP of what already exists,
   // it never duplicates the place data itself.
-  const [graph, setGraph] = useState({ artists: {}, artworks: {}, stories: {}, tours: {}, edges: {} });
+  const [graph, setGraph] = useState({ artists: {}, artworks: {}, events: {}, stories: {}, tours: {}, edges: {} });
   // Which specific artist/artwork/story nodes the player has personally
   // unlocked — separate from `checkIns` (which just means "visited the
   // place"). A place can hold several discoverables; checking in doesn't
@@ -1706,7 +1706,7 @@ function MiniStep({ icon: Icon, label }) {
 
 /* ================= MAP SCREEN (now its own full page — the whole focus) ================= */
 function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, homeBase, xp = 0, playerPosition, avatarModel, onCollectDrop, worldBuilderActive, onPublishLocation, onExitWorldBuilder, onJumpToAddress, jumpTrigger,
-  graph = { artists: {}, artworks: {}, stories: {}, tours: {}, edges: {} }, onResearchPlace, researchingPlaceId, onApproveItem, onRejectItem, onEditField, activeTour, onStartTour, onStopTour }) {
+  graph = { artists: {}, artworks: {}, events: {}, stories: {}, tours: {}, edges: {} }, onResearchPlace, researchingPlaceId, onApproveItem, onRejectItem, onEditField, activeTour, onStartTour, onStopTour }) {
   const [filter, setFilter] = useState("all");
   const [organizeBy, setOrganizeBy] = useState("map"); // map | met | connections
   const [showList, setShowList] = useState(false); // minimal UI: the deadlines/level panel is collapsed by default
@@ -1955,18 +1955,44 @@ function WorldBuilderReviewQueue({ graph, onApprove, onReject, onEditField, plac
   }
 
   function SuggestionCard({ kind, item }) {
-    const titleField = kind === "artwork" ? "title" : kind === "story" ? "title" : "name";
+    const titleField = kind === "artwork" || kind === "event" ? "title" : kind === "story" ? "title" : "name";
+    const bodyField = kind === "artwork" || kind === "event" ? "description" : kind === "story" ? "body" : "bio";
+    const isProfile = kind === "story" && item.type === "profile";
+    const isFact = kind === "story" && item.type === "fact";
     return (
       <div style={{ background: "#00000040", borderRadius: 8, padding: "8px 10px", marginTop: 6 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <Field kind={kind} item={item} field={titleField} />
+          <div>
+            {kind === "story" && (
+              <div style={{ fontSize: 9, letterSpacing: 0.5, color: isFact ? "#D9A441" : isProfile ? "#5B8FD9" : "#C25BD9", fontWeight: 700 }}>
+                {isFact ? "✨ FUN FACT" : isProfile ? "ABOUT THIS PLACE" : "HISTORY"}
+              </div>
+            )}
+            {kind === "event" && item.date && <div style={{ fontSize: 9, letterSpacing: 0.5, color: "#D9A441", fontWeight: 700 }}>{item.date.toUpperCase()} · {(item.eventType || "event").toUpperCase()}</div>}
+            {!isFact && <Field kind={kind} item={item} field={titleField} />}
+          </div>
           <div style={{ display: "flex", gap: 4, flexShrink: 0, marginLeft: 8 }}>
             <button onClick={() => onApprove(kind, item.id)} title="Approve" style={{ background: "#5BD9B0", border: "none", borderRadius: 6, width: 22, height: 22, fontSize: 12 }}>✓</button>
             <button onClick={() => onReject(kind, item.id)} title="Reject" style={{ background: "#D9527A", border: "none", borderRadius: 6, width: 22, height: 22, fontSize: 12, color: "#fff" }}>✕</button>
           </div>
         </div>
-        <Field kind={kind} item={item} field={kind === "artwork" ? "description" : kind === "story" ? "body" : "bio"} />
-        <div style={{ fontSize: 9.5, color: "#8a8496", marginTop: 4, fontStyle: "italic" }}>{item.sourceNote}</div>
+        <Field kind={kind} item={item} field={bodyField} />
+        {/* Profile-specific structured fields — surfaced explicitly, not
+            buried in prose, since "who owns it / what kind of place is it"
+            is the whole point of asking for a profile in the first place. */}
+        {isProfile && (item.businessTypes || []).length > 0 && (
+          <div style={{ fontSize: 11, color: "#cbbfd6", marginTop: 4 }}><b style={{ color: "#EDE7D9" }}>Type: </b>{item.businessTypes.join(", ")}</div>
+        )}
+        {isProfile && (item.ownerNames || []).length > 0 && (
+          <div style={{ fontSize: 11, color: "#cbbfd6", marginTop: 2 }}><b style={{ color: "#EDE7D9" }}>Owner(s): </b>{item.ownerNames.join(", ")}</div>
+        )}
+        {item.sourceNote && (
+          <div style={{ fontSize: 9.5, color: "#8a8496", marginTop: 4 }}>
+            source: {/^https?:\/\//.test(item.sourceNote)
+              ? <a href={item.sourceNote} target="_blank" rel="noreferrer" style={{ color: "#5B8FD9" }}>{item.sourceNote}</a>
+              : <i>{item.sourceNote}</i>}
+          </div>
+        )}
       </div>
     );
   }
@@ -1979,6 +2005,7 @@ function WorldBuilderReviewQueue({ graph, onApprove, onReject, onEditField, plac
           <div style={{ fontFamily: head, fontSize: 11.5, color: "#D9A441", fontWeight: 700 }}>{placeNameById[pid] || pid}</div>
           {groups[pid].artists.map(a => <SuggestionCard key={a.id} kind="artist" item={a} />)}
           {groups[pid].artworks.map(a => <SuggestionCard key={a.id} kind="artwork" item={a} />)}
+          {groups[pid].events.map(e => <SuggestionCard key={e.id} kind="event" item={e} />)}
           {groups[pid].stories.map(s => <SuggestionCard key={s.id} kind="story" item={s} />)}
         </div>
       ))}
