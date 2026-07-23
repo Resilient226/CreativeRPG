@@ -4,12 +4,12 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { storageGet, storageSet } from "./lib/storage";
 import { onAuthChange, signUpEmail, signInEmail, signInGoogle, signOutUser, authErrorMessage } from "./lib/firebase";
-import { callModel, allText, extractJson } from "./lib/model";
+import { callModel, allText, extractJson, searchWeb } from "./lib/model";
 import {
   makeArtistNode, makeArtworkNode, makeStoryNode, makeTourNode, makeEdge,
   approveItem, rejectItem, editField, regeneratableFields,
   computeArtistProgress, computeNeighborhoodProgress, computeTourProgress, nearbyPlaceIds,
-  buildResearchPrompt, suggestionsToGraphDelta, mergeGraphDelta, pendingByPlace,
+  buildResearchPrompt, buildResearchQuery, suggestionsToGraphDelta, mergeGraphDelta, pendingByPlace,
 } from "./engines/knowledgeGraphEngine";
 import TrainingGrounds from "./training/TrainingGrounds";
 import { LEVEL_TEMPLATE, computeLevels, computeReadiness, isAtRisk, computeCategoryProgress } from "./engines/blueprintEngine";
@@ -615,25 +615,34 @@ export default function CreativeEmpireOS() {
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 2600); }
 
   /**
-   * Research a real Creative Place with AI, producing PENDING suggestions
-   * only — nothing goes live until approved in the Review Queue. See
-   * knowledgeGraphEngine's buildResearchPrompt for why this is deliberately
-   * conservative: the backend model (Groq/Llama, see api/model.js) has no
-   * live web search wired in, so this can only draw on the model's general
-   * knowledge — real, obscure small venues may come back with an honest
-   * empty result, which is correct behavior, not a bug.
+   * Research a real Creative Place, producing PENDING suggestions only —
+   * nothing goes live until approved in the Review Queue. Two separate
+   * steps, each backed by its own free service: Tavily actually searches
+   * the web for this specific venue (real source URLs, real free quota,
+   * 1,000/month); Groq then extracts structured facts ONLY from what
+   * Tavily found (see buildResearchPrompt) — it never invents beyond the
+   * search results. This replaces the earlier Gemini-bundled-grounding
+   * approach, which tied search and text generation to one shared, opaque,
+   * easily-exhausted quota.
    */
   async function researchPlace(place) {
     setResearchingPlaceId(place.id);
     try {
-      const { system, user } = buildResearchPrompt(place);
-      const { data, usedSearch } = await callModel({ system, messages: [{ role: "user", content: user }], maxTokens: 900, useSearch: true });
+      const query = buildResearchQuery(place);
+      let searchResults = [];
+      try {
+        searchResults = await searchWeb(query, 5);
+      } catch (searchErr) {
+        flash(`Search failed (${searchErr.message}) — asking the model with no sources, likely to return empty`);
+      }
+      const { system, user } = buildResearchPrompt(place, searchResults);
+      const { data } = await callModel({ system, messages: [{ role: "user", content: user }], maxTokens: 900 });
       const parsed = extractJson(allText(data), "object");
       const delta = suggestionsToGraphDelta(parsed, place.id);
       setGraph(g => mergeGraphDelta(g, delta));
       const n = delta.artists.length + delta.artworks.length + delta.stories.length;
-      const searchNote = usedSearch ? " (web-grounded)" : " (no live search — general knowledge only)";
-      flash(n ? `🔮 Found ${n} suggestion${n === 1 ? "" : "s"} for ${place.name}${searchNote} — review in the queue` : `No confident results for ${place.name} — try adding facts manually`);
+      const searchNote = searchResults.length ? ` (${searchResults.length} sources found)` : " (no sources found)";
+      flash(n ? `🔮 Found ${n} suggestion${n === 1 ? "" : "s"} for ${place.name}${searchNote} — review in the queue` : `No confident results for ${place.name}${searchNote} — try adding facts manually`);
     } catch (err) {
       flash(`Research failed: ${err.message || "unknown error"}`);
     } finally {
