@@ -46,8 +46,62 @@ const T = {
   green: "#4ADE80", blue: "#5B9BFF", purple: "#B98CFF", rose: "#FF6B81",
   sky: "#243038", river: "#1f3a42", forest: "#1c2b1e", forestLight: "#26392a",
 };
-const head = "'Baloo 2', system-ui, sans-serif";
+const head = "'Poppins', 'Baloo 2', system-ui, sans-serif"; // chunky rounded display (Orbix-style titles)
 const body = "'Nunito', system-ui, sans-serif";
+
+/* ---------------- design system: the reference's STRUCTURAL language ----------------
+   The inspiration maps aren't distinctive because of color — they're
+   distinctive because of SHAPE: big soft corner radii, cards that float
+   above the world on soft shadows, generous padding, fully-rounded pills.
+   These tokens capture that language in one place so every screen inherits
+   the same feel instead of each being hand-tuned. */
+const DS = {
+  radius: { pill: 999, card: 24, chip: 16, inner: 14 }, // much rounder than the old 8–12px
+  // Soft, layered drop shadows — the single biggest thing that makes a card
+  // read as "floating above the map" instead of "a flat panel stuck to it."
+  shadow: {
+    card: "0 8px 28px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.18)",
+    chip: "0 3px 10px rgba(0,0,0,0.22)",
+    float: "0 12px 36px rgba(0,0,0,0.34)",
+  },
+  pad: { card: 18, tight: 12, roomy: 22 }, // generous breathing room
+};
+
+/** Chunky fully-rounded pill button — the reference's primary control shape. */
+function PillButton({ children, onClick, tone = "accent", style = {}, disabled }) {
+  const bg = tone === "accent" ? T.gold : tone === "dark" ? "#1c1c1c" : "#ffffff14";
+  const fg = tone === "accent" ? "#0A0A0A" : "#fff";
+  return (
+    <button onClick={onClick} disabled={disabled} style={{
+      background: disabled ? "#2a2a2a" : bg, color: disabled ? "#777" : fg, border: "none",
+      borderRadius: DS.radius.pill, padding: "12px 22px", fontFamily: head, fontWeight: 700, fontSize: 14,
+      boxShadow: tone === "accent" && !disabled ? DS.shadow.chip : "none", cursor: "pointer", ...style,
+    }}>{children}</button>
+  );
+}
+
+/** Rounded icon-in-circle — the reference uses this everywhere for stats,
+ *  categories, and actions. */
+function IconCircle({ icon: Icon, color = T.gold, size = 40, bg }) {
+  return (
+    <div style={{ width: size, height: size, borderRadius: "50%", flexShrink: 0,
+      background: bg || `${color}22`, display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: DS.shadow.chip }}>
+      <Icon size={size * 0.5} color={color} />
+    </div>
+  );
+}
+
+/** Floating card — soft shadow, big radius, generous pad. The reference's
+ *  core content container. */
+function FloatCard({ children, style = {}, onClick }) {
+  return (
+    <div onClick={onClick} style={{
+      background: "#141414", borderRadius: DS.radius.card, padding: DS.pad.card,
+      boxShadow: DS.shadow.card, border: "1px solid #ffffff10", ...style,
+    }}>{children}</div>
+  );
+}
 
 /* ---------------- seed data ---------------- */
 const initialContacts = [
@@ -1121,7 +1175,7 @@ export default function CreativeEmpireOS() {
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream,
       fontFamily: body, maxWidth: 480, margin: "0 auto", position: "relative", paddingBottom: tab === "map" ? 0 : 84 }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Poppins:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         button { cursor: pointer; font-family: inherit; }
         input, textarea { font-family: inherit; }
@@ -1138,25 +1192,26 @@ export default function CreativeEmpireOS() {
           visible so there's always a reason to walk somewhere today. */}
       {tab === "map" && !worldBuilderActive && !arrival && (
         <div style={{ position: "fixed", top: "calc(14px + env(safe-area-inset-top, 0px))", left: "50%",
-          transform: "translateX(-50%)", zIndex: 45, background: "#0A0A0Aee", border: "1px solid #39FF7A44",
-          borderRadius: 16, padding: "8px 14px", minWidth: 190, backdropFilter: "blur(8px)" }}>
+          transform: "translateX(-50%)", zIndex: 45, background: "#0F0F0Fee", borderRadius: DS.radius.card,
+          padding: "12px 16px", minWidth: 210, backdropFilter: "blur(10px)", boxShadow: DS.shadow.card, border: "1px solid #ffffff12" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <span style={{ fontFamily: body, fontSize: 10, letterSpacing: 1, color: "#39FF7A", fontWeight: 700 }}>
+            <span style={{ fontFamily: head, fontSize: 10.5, letterSpacing: 1, color: T.gold, fontWeight: 700 }}>
               DAILY QUEST
             </span>
             {streak.count > 0 && (
-              <span style={{ fontFamily: body, fontSize: 11, color: "#fff" }}>🔥 {streak.count}</span>
+              <span style={{ fontFamily: head, fontSize: 12, fontWeight: 700, color: "#fff",
+                background: "#ffffff12", borderRadius: DS.radius.pill, padding: "2px 9px" }}>🔥 {streak.count}</span>
             )}
           </div>
-          <div style={{ fontFamily: body, fontSize: 12, color: "#fff", marginTop: 2 }}>
+          <div style={{ fontFamily: head, fontSize: 13.5, fontWeight: 600, color: "#fff", marginTop: 4 }}>
             Discover {DAILY_DISCOVERY_TARGET} places
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
-            <div style={{ flex: 1, height: 5, borderRadius: 3, background: "#ffffff1a", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+            <div style={{ flex: 1, height: 7, borderRadius: DS.radius.pill, background: "#ffffff14", overflow: "hidden" }}>
               <div style={{ width: `${Math.min(100, (todayDiscoveries / DAILY_DISCOVERY_TARGET) * 100)}%`, height: "100%",
-                background: "#39FF7A", transition: "width 0.4s ease" }} />
+                background: T.gold, borderRadius: DS.radius.pill, transition: "width 0.4s ease" }} />
             </div>
-            <span style={{ fontFamily: body, fontSize: 11, color: "#9a9a9a" }}>
+            <span style={{ fontFamily: head, fontSize: 12, fontWeight: 700, color: "#9a9a9a" }}>
               {Math.min(todayDiscoveries, DAILY_DISCOVERY_TARGET)}/{DAILY_DISCOVERY_TARGET}
             </span>
           </div>
@@ -1164,9 +1219,9 @@ export default function CreativeEmpireOS() {
       )}
       {tab === "map" && nextDiscovery && !arrival && !worldBuilderActive && (
         <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: 150, zIndex: 45,
-          background: "#0A0A0Aee", border: "1px solid #39FF7A55", borderRadius: 22, padding: "8px 16px",
-          color: "#fff", fontFamily: body, fontSize: 13, display: "flex", gap: 8, alignItems: "center",
-          boxShadow: "0 4px 14px #0008", whiteSpace: "nowrap", maxWidth: "88%", overflow: "hidden" }}>
+          background: "#0F0F0Fee", border: "1px solid #ffffff14", borderRadius: DS.radius.pill, padding: "10px 18px",
+          color: "#fff", fontFamily: head, fontSize: 13, fontWeight: 600, display: "flex", gap: 8, alignItems: "center",
+          boxShadow: DS.shadow.card, whiteSpace: "nowrap", maxWidth: "88%", overflow: "hidden", backdropFilter: "blur(10px)" }}>
           <span>🧭</span>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
             <b>{nextDiscovery.node.name}</b>
@@ -1177,52 +1232,65 @@ export default function CreativeEmpireOS() {
       {/* ARRIVAL IS THE PAYOFF — the card that guarantees "you arrived and
           something happened." XP, collection progress, and the next pull. */}
       {arrival && (
-        <div onClick={() => setArrival(null)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "#000000a0",
-          display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+        <div onClick={() => setArrival(null)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "#000000a8",
+          display: "flex", alignItems: "flex-end", justifyContent: "center", backdropFilter: "blur(3px)" }}>
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480,
-            background: "#0A0A0A", borderRadius: "22px 22px 0 0",
-            padding: "22px 20px 30px", color: "#fff", fontFamily: body, borderTop: "2px solid #39FF7A" }}>
-            <div style={{ fontSize: 36, textAlign: "center" }}>{(CATEGORY_MARKER_STYLE[arrival.category] || {}).emoji || "📍"}</div>
-            <div style={{ textAlign: "center", fontSize: 12, letterSpacing: 2, color: "#39FF7A", marginTop: 6, fontWeight: 700 }}>
-              {arrival.first ? "NEW DISCOVERY" : "WELCOME BACK"}
+            background: "#0F0F0F", borderRadius: `${DS.radius.card}px ${DS.radius.card}px 0 0`,
+            padding: `${DS.pad.roomy}px ${DS.pad.roomy}px 30px`, color: "#fff", fontFamily: body,
+            boxShadow: DS.shadow.float }}>
+            {/* grab handle — the reference's sheets all have one */}
+            <div style={{ width: 40, height: 4, borderRadius: 2, background: "#ffffff2a", margin: "0 auto 16px" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ width: 56, height: 56, borderRadius: DS.radius.inner, background: `${T.gold}1c`,
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, boxShadow: DS.shadow.chip }}>
+                {(CATEGORY_MARKER_STYLE[arrival.category] || {}).emoji || "📍"}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontFamily: head, fontSize: 11, letterSpacing: 1.5, color: T.gold, fontWeight: 700 }}>
+                  {arrival.first ? "NEW DISCOVERY" : "WELCOME BACK"}
+                </div>
+                <div style={{ fontFamily: head, fontSize: 24, fontWeight: 800, marginTop: 1, lineHeight: 1.1 }}>{arrival.name}</div>
+              </div>
             </div>
-            <div style={{ textAlign: "center", fontSize: 22, fontWeight: 700, marginTop: 4 }}>{arrival.name}</div>
             {arrival.story && (
-              <div style={{ fontSize: 13, color: "#b8b8b8", marginTop: 10, textAlign: "center", lineHeight: 1.5 }}>{arrival.story}</div>
+              <div style={{ fontSize: 13.5, color: "#b8b8b8", marginTop: 14, lineHeight: 1.55 }}>{arrival.story}</div>
             )}
-            {/* A Creative Place can hold several discoverables — surfacing all of
-                them here (not just "you visited a place") is the whole point of
-                the artwork/artist layer: one arrival, several unlocks. */}
             {arrival.discoverables && arrival.discoverables.length > 0 && (
-              <div style={{ marginTop: 12, background: "#ffffff0a", borderRadius: 12, padding: "10px 12px" }}>
-                <div style={{ fontSize: 10, letterSpacing: 1, color: "#39FF7A", fontWeight: 700, marginBottom: 6 }}>
+              <div style={{ marginTop: 16, background: "#ffffff0d", borderRadius: DS.radius.chip, padding: DS.pad.tight, boxShadow: DS.shadow.chip }}>
+                <div style={{ fontFamily: head, fontSize: 10.5, letterSpacing: 1, color: T.gold, fontWeight: 700, marginBottom: 8 }}>
                   {arrival.discoverables.length} DISCOVERY{arrival.discoverables.length === 1 ? "" : "IES"} UNLOCKED
                 </div>
                 {arrival.discoverables.map((d, i) => (
-                  <div key={i} style={{ fontSize: 13, color: "#fff", marginTop: i ? 6 : 0 }}>
-                    <span style={{ color: "#39FF7A" }}>✦</span> {d.title}
+                  <div key={i} style={{ fontSize: 13.5, color: "#fff", marginTop: i ? 8 : 0, display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ color: T.gold }}>✦</span> {d.title}
                   </div>
                 ))}
               </div>
             )}
-            <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 14, fontSize: 13 }}>
-              <span style={{ color: "#39FF7A", fontWeight: 700 }}>+{arrival.xpGained} XP</span>
-              <span style={{ color: "#9a9a9a" }}>{heroStats.discovered}/{heroStats.total} places discovered</span>
+            {/* stat row as two floating chips — the reference's icon-stat pattern */}
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <div style={{ flex: 1, background: "#ffffff0d", borderRadius: DS.radius.chip, padding: "12px 14px", boxShadow: DS.shadow.chip }}>
+                <div style={{ fontFamily: head, fontSize: 20, fontWeight: 800, color: T.gold }}>+{arrival.xpGained}</div>
+                <div style={{ fontSize: 10.5, color: "#9a9a9a", fontFamily: head, letterSpacing: 0.5 }}>XP EARNED</div>
+              </div>
+              <div style={{ flex: 1, background: "#ffffff0d", borderRadius: DS.radius.chip, padding: "12px 14px", boxShadow: DS.shadow.chip }}>
+                <div style={{ fontFamily: head, fontSize: 20, fontWeight: 800, color: "#fff" }}>{heroStats.discovered}/{heroStats.total}</div>
+                <div style={{ fontSize: 10.5, color: "#9a9a9a", fontFamily: head, letterSpacing: 0.5 }}>DISCOVERED</div>
+              </div>
             </div>
             {activeTour && graph.tours[activeTour.tourId] && (
-              <div style={{ textAlign: "center", marginTop: 10, fontSize: 12, color: "#39FF7A" }}>
+              <div style={{ marginTop: 12, fontSize: 12.5, color: T.gold, fontFamily: head, fontWeight: 600 }}>
                 🏛️ {graph.tours[activeTour.tourId].name} — stop {Math.min(activeTour.legIndex + 1, graph.tours[activeTour.tourId].stops.length)}/{graph.tours[activeTour.tourId].stops.length}
               </div>
             )}
             {nextDiscovery && (
-              <div style={{ textAlign: "center", marginTop: 12, fontSize: 13, color: "#ccc" }}>
-                Next: <b>{nextDiscovery.node.name}</b> · {nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
+              <div style={{ marginTop: 14, fontSize: 13, color: "#ccc", display: "flex", alignItems: "center", gap: 6 }}>
+                <span>🧭</span> Next: <b style={{ color: "#fff" }}>{nextDiscovery.node.name}</b> · {nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
               </div>
             )}
-            <button onClick={() => setArrival(null)} style={{ marginTop: 16, width: "100%", padding: "13px 0",
-              borderRadius: 14, border: "none", background: "#39FF7A", color: "#0A0A0A", fontWeight: 700, fontSize: 15 }}>
+            <PillButton onClick={() => setArrival(null)} style={{ marginTop: 18, width: "100%", padding: "15px 0", fontSize: 15 }}>
               Keep exploring
-            </button>
+            </PillButton>
           </div>
         </div>
       )}
@@ -3904,14 +3972,14 @@ function PlaceDetailSheet({ node, onClose, onEdit, onRequestDelete, onAddDetail,
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000000d0", zIndex: 95, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, maxHeight: "88vh", overflow: "auto",
-        background: "#0A0A0A", borderTopLeftRadius: 22, borderTopRightRadius: 22, border: "1px solid #ffffff14", borderBottom: "none" }}>
+        background: "#0F0F0F", borderTopLeftRadius: DS.radius.card, borderTopRightRadius: DS.radius.card, border: "1px solid #ffffff12", borderBottom: "none", boxShadow: DS.shadow.float }}>
 
         {/* Header: photo-style hero panel. No real per-place photo asset
             exists yet, so this is a dark gradient icon panel — same
             treatment the mockup's photo header gives, honestly standing in
             for a photo the app doesn't have. */}
         <div style={{ position: "relative", height: 150, background: `linear-gradient(160deg, ${node.color || "#333"}33, #0A0A0A 85%)`,
-          borderTopLeftRadius: 22, borderTopRightRadius: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          borderTopLeftRadius: DS.radius.card, borderTopRightRadius: DS.radius.card, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Icon size={44} color={node.color || DISCOVERY_ACCENT} style={{ opacity: 0.85 }} />
           <button onClick={onClose} style={{ position: "absolute", top: 14, left: 14, width: 32, height: 32, borderRadius: "50%",
             background: "#00000066", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -4561,7 +4629,7 @@ function Login_() {
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream,
       fontFamily: body, maxWidth: 480, margin: "0 auto", display: "flex", flexDirection: "column",
       justifyContent: "center", padding: "24px 22px" }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Poppins:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
         * { box-sizing: border-box; } input, button { font-family: inherit; }`}</style>
       <div style={{ textAlign: "center", marginBottom: 24 }}>
         <div style={{ fontFamily: head, fontWeight: 800, fontSize: 26 }}>Creative Empire <span style={{ color: T.gold }}>OS</span></div>
@@ -4615,7 +4683,7 @@ function Onboarding_({ onFinish }) {
   return (
     <div style={{ minHeight: "100vh", background: `linear-gradient(180deg, ${T.ink}, #100b06)`, color: T.textCream,
       fontFamily: body, maxWidth: 480, margin: "0 auto", padding: "24px 18px 40px" }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Poppins:wght@600;700;800&family=Nunito:wght@500;600;700;800&display=swap');
         * { box-sizing: border-box; } input, textarea, button { font-family: inherit; }`}</style>
 
       <div style={{ fontFamily: head, fontWeight: 800, fontSize: 22, textAlign: "center" }}>Let's build your world</div>
