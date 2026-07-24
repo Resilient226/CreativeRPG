@@ -34,18 +34,31 @@ import {
 
 /* ---------------- storybook design tokens ---------------- */
 const T = {
-  // Every token NAME below is unchanged — well over a hundred call sites
-  // across every screen already reference T.xxx, so rewriting what these
-  // values ARE (light card surfaces → dark, dark text → light, warm gold →
-  // neon green) reskins the whole app from one place, safely, instead of
-  // hand-editing every individual usage site across a ~4700-line file.
-  ink: "#0A0A0A", panel: "#141414", wood: "#242424", woodLight: "#333333",
-  parchment: "#161616", parchmentDark: "#0e0e0e", cream: "#1a1a1a",
-  gold: "#39FF7A", goldBright: "#5CFF95",
-  textDark: "#F2F2F2", textCream: "#FFFFFF", textMuted: "#9a9a9a",
-  green: "#4ADE80", blue: "#5B9BFF", purple: "#B98CFF", rose: "#FF6B81",
-  sky: "#243038", river: "#1f3a42", forest: "#1c2b1e", forestLight: "#26392a",
+  // Reference-matched palette: TRUE black surfaces (not dark grey), content
+  // floats on pure black, separation comes from the black gaps between cards
+  // rather than borders. The single-green accent is gone — this reference's
+  // identity is MULTICOLOR GRADIENTS (see GRAD below), so the flat accent
+  // tokens now point at neutral card tones and gradients carry the color.
+  ink: "#000000", panel: "#0E0E0E", wood: "#1A1A1A", woodLight: "#262626",
+  parchment: "#0C0C0C", parchmentDark: "#000000", cream: "#141414",
+  gold: "#C77DFF", goldBright: "#E0AAFF", // "accent" fallbacks now soft violet (used where a single color is unavoidable)
+  textDark: "#F5F5F5", textCream: "#FFFFFF", textMuted: "#8A8A8A",
+  green: "#4ADE80", blue: "#5B9BFF", purple: "#B98CFF", rose: "#FF6B9D",
+  sky: "#1a1a1a", river: "#141414", forest: "#121212", forestLight: "#1c1c1c",
 };
+
+/* The gradient system IS the visual identity of this reference. A small,
+   named set used consistently: primary for main actions, and a rotating
+   set for chips/tabs so the multicolor feel comes through without chaos. */
+const GRAD = {
+  primary: "linear-gradient(90deg, #FF6B9D 0%, #C77DFF 50%, #5B9BFF 100%)", // pink→purple→blue (buttons, active pill)
+  warm: "linear-gradient(90deg, #FF8A5B 0%, #FF6B9D 100%)",   // orange→pink
+  cool: "linear-gradient(90deg, #5B9BFF 0%, #4ADE80 100%)",    // blue→green
+  violet: "linear-gradient(90deg, #C77DFF 0%, #7B5CFF 100%)",  // purple family
+  sunset: "linear-gradient(90deg, #FFB13C 0%, #FF6B9D 60%, #C77DFF 100%)",
+};
+// Rotating chip gradients — used in order so a row of tags reads multicolor.
+const CHIP_GRADS = [GRAD.warm, GRAD.violet, GRAD.cool, GRAD.primary, GRAD.sunset];
 const head = "'Poppins', 'Baloo 2', system-ui, sans-serif"; // chunky rounded display (Orbix-style titles)
 const body = "'Nunito', system-ui, sans-serif";
 
@@ -67,39 +80,70 @@ const DS = {
   pad: { card: 18, tight: 12, roomy: 22 }, // generous breathing room
 };
 
-/** Chunky fully-rounded pill button — the reference's primary control shape. */
-function PillButton({ children, onClick, tone = "accent", style = {}, disabled }) {
-  const bg = tone === "accent" ? T.gold : tone === "dark" ? "#1c1c1c" : "#ffffff14";
-  const fg = tone === "accent" ? "#0A0A0A" : "#fff";
+/** Primary action — filled with the signature gradient, fully rounded.
+ *  This is the reference's "Add to My Plan" button shape. */
+function PillButton({ children, onClick, tone = "primary", style = {}, disabled }) {
+  const grad = GRAD[tone] || GRAD.primary;
   return (
     <button onClick={onClick} disabled={disabled} style={{
-      background: disabled ? "#2a2a2a" : bg, color: disabled ? "#777" : fg, border: "none",
-      borderRadius: DS.radius.pill, padding: "12px 22px", fontFamily: head, fontWeight: 700, fontSize: 14,
-      boxShadow: tone === "accent" && !disabled ? DS.shadow.chip : "none", cursor: "pointer", ...style,
+      background: disabled ? "#1c1c1c" : grad, color: disabled ? "#666" : "#fff", border: "none",
+      borderRadius: DS.radius.pill, padding: "14px 24px", fontFamily: head, fontWeight: 700, fontSize: 14.5,
+      boxShadow: disabled ? "none" : "0 6px 18px rgba(199,125,255,0.28)", cursor: "pointer", ...style,
     }}>{children}</button>
   );
 }
 
-/** Rounded icon-in-circle — the reference uses this everywhere for stats,
- *  categories, and actions. */
-function IconCircle({ icon: Icon, color = T.gold, size = 40, bg }) {
+/** Rounded icon-in-circle. */
+function IconCircle({ icon: Icon, color = "#C77DFF", size = 40, bg }) {
   return (
     <div style={{ width: size, height: size, borderRadius: "50%", flexShrink: 0,
-      background: bg || `${color}22`, display: "flex", alignItems: "center", justifyContent: "center",
-      boxShadow: DS.shadow.chip }}>
+      background: bg || "#1A1A1A", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <Icon size={size * 0.5} color={color} />
     </div>
   );
 }
 
-/** Floating card — soft shadow, big radius, generous pad. The reference's
- *  core content container. */
+/** Floating card — BORDERLESS on true black, separation from soft shadow +
+ *  the black gaps around it, exactly like the reference (no outlines). */
 function FloatCard({ children, style = {}, onClick }) {
   return (
     <div onClick={onClick} style={{
-      background: "#141414", borderRadius: DS.radius.card, padding: DS.pad.card,
-      boxShadow: DS.shadow.card, border: "1px solid #ffffff10", ...style,
+      background: "#0E0E0E", borderRadius: DS.radius.card, padding: DS.pad.card,
+      boxShadow: DS.shadow.card, ...style,
     }}>{children}</div>
+  );
+}
+
+/** Pill tab row — the About/Location/Posts/Q&A control. Active tab is filled
+ *  with a gradient; inactive tabs are dark pills with muted text. */
+function PillTabs({ tabs, active, onChange, grad = GRAD.primary }) {
+  return (
+    <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "2px 0" }}>
+      {tabs.map(t => {
+        const on = t.key === active;
+        return (
+          <button key={t.key} onClick={() => onChange(t.key)} style={{
+            flexShrink: 0, borderRadius: DS.radius.pill, padding: "9px 18px", border: "none",
+            background: on ? grad : "#161616", color: on ? "#fff" : "#9a9a9a",
+            fontFamily: head, fontWeight: 700, fontSize: 13, cursor: "pointer",
+            boxShadow: on ? "0 4px 14px rgba(199,125,255,0.3)" : "none",
+          }}>{t.label}</button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Gradient-outlined chip — the sentiment tags. A gradient border via a
+ *  2px gradient background with a dark inner fill. `i` rotates the color so
+ *  a row reads multicolor. */
+function GradChip({ children, i = 0 }) {
+  const grad = CHIP_GRADS[i % CHIP_GRADS.length];
+  return (
+    <span style={{ display: "inline-block", background: grad, borderRadius: DS.radius.pill, padding: 1.5 }}>
+      <span style={{ display: "inline-block", background: "#0E0E0E", borderRadius: DS.radius.pill,
+        padding: "6px 13px", fontFamily: head, fontSize: 11.5, fontWeight: 600, color: "#EDEDED" }}>{children}</span>
+    </span>
   );
 }
 
@@ -1209,7 +1253,7 @@ export default function CreativeEmpireOS() {
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
             <div style={{ flex: 1, height: 7, borderRadius: DS.radius.pill, background: "#ffffff14", overflow: "hidden" }}>
               <div style={{ width: `${Math.min(100, (todayDiscoveries / DAILY_DISCOVERY_TARGET) * 100)}%`, height: "100%",
-                background: T.gold, borderRadius: DS.radius.pill, transition: "width 0.4s ease" }} />
+                background: GRAD.primary, borderRadius: DS.radius.pill, transition: "width 0.4s ease" }} />
             </div>
             <span style={{ fontFamily: head, fontSize: 12, fontWeight: 700, color: "#9a9a9a" }}>
               {Math.min(todayDiscoveries, DAILY_DISCOVERY_TARGET)}/{DAILY_DISCOVERY_TARGET}
@@ -1861,9 +1905,9 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
       {worldBuilderActive && (
         <>
           <div style={{ position: "absolute", top: "calc(60px + env(safe-area-inset-top, 0px))", left: 10, right: 10,
-            background: "#39FF7A", borderRadius: 10, padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            background: "#C77DFF", borderRadius: 10, padding: "6px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span style={{ fontFamily: head, fontWeight: 800, fontSize: 11.5, color: "#0A0A0A" }}>🛠 WORLD BUILDER — FREE ROAM</span>
-            <button onClick={onExitWorldBuilder} style={{ background: "#0A0A0A", color: "#39FF7A", border: "none",
+            <button onClick={onExitWorldBuilder} style={{ background: "#000000", color: "#C77DFF", border: "none",
               borderRadius: 6, padding: "3px 9px", fontFamily: head, fontWeight: 700, fontSize: 10.5 }}>EXIT</button>
           </div>
 
@@ -1890,7 +1934,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
                 {wbJumpBusy ? "Finding address…" : "Jump Here"}
               </button>
 
-              <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#39FF7A", marginBottom: 5 }}>ADD REAL LOCATION</div>
+              <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 1, color: "#C77DFF", marginBottom: 5 }}>ADD REAL LOCATION</div>
               <input value={wbName} onChange={e => setWbName(e.target.value)} placeholder="Name (e.g. Nina Baldwin Gallery)"
                 style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
                   color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 6 }} />
@@ -1898,7 +1942,7 @@ function MapScreen_({ nodes, quests, events, energy, onSelect, onShowIdeas, home
                 style={{ width: "100%", background: "#181C28", border: "1px solid #282D38", borderRadius: 8, padding: "8px 10px",
                   color: "#EDE7D9", fontFamily: body, fontSize: 12.5, outline: "none", marginBottom: 8 }} />
               <button onClick={publishLocation} disabled={wbBusy} style={{ width: "100%", padding: 10, borderRadius: 8, border: "none",
-                background: wbBusy ? "#2a3d2e" : "#39FF7A", color: "#0A0A0A", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>
+                background: wbBusy ? "#2a3d2e" : "#C77DFF", color: "#000000", fontFamily: head, fontWeight: 700, fontSize: 12.5 }}>
                 {wbBusy ? "Geocoding real address…" : "Publish"}
               </button>
               {wbMsg && <div style={{ fontFamily: body, fontSize: 11, color: "#fff", marginTop: 6 }}>{wbMsg}</div>}
@@ -3914,7 +3958,7 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
  * real to show simply don't render, rather than being padded out with
  * placeholder text.
  */
-const DISCOVERY_ACCENT = "#39FF7A"; // the mockup's neon green
+const DISCOVERY_ACCENT = "#C77DFF"; // reference's soft violet (was neon green); gradients (GRAD) carry the multicolor identity elsewhere
 function PlaceDetailSheet({ node, onClose, onEdit, onRequestDelete, onAddDetail, graph, checkIns, unlockedDiscoverables }) {
   const Icon = node.icon || PinIcon;
   const visit = checkIns[node.id];
