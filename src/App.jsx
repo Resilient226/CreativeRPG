@@ -1736,66 +1736,78 @@ function Home_({ profile, levels, xp = 0, streak, todayDiscoveries = 0, heroStat
   );
 
   return (
-    <div style={{ padding: "16px 14px 90px", background: "#000", minHeight: "100vh" }}>
-      {/* Profile header — gradient avatar ring, name, level, XP-to-next bar */}
-      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 16 }}>
-        <div style={{ position: "relative", width: 60, height: 60, flexShrink: 0 }}>
-          <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: GRAD.primary, padding: 3 }}>
-            <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: "#1a1a1a",
-              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>🧑🏾‍🎨</div>
-          </div>
-          <div style={{ position: "absolute", bottom: -2, right: -2, minWidth: 22, height: 22, padding: "0 5px", borderRadius: 11,
-            background: GRAD.violet, border: "2px solid #000", display: "flex", alignItems: "center", justifyContent: "center",
-            fontFamily: head, fontWeight: 800, fontSize: 10, color: "#fff" }}>{currentLevel.n}</div>
-        </div>
+    <div style={{ padding: "18px 16px 90px", background: "#000", minHeight: "100vh" }}>
+      {/* Big bold greeting heading — the reference's oversized title treatment,
+          with the small profile avatar floated to the right. */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 20, color: "#fff" }}>{profile?.name || "Explorer"}</div>
-          <div style={{ fontFamily: head, fontSize: 12, fontWeight: 700, background: GRAD.primary, WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{currentLevel.title}</div>
-          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ flex: 1, height: 6, borderRadius: DS.radius.pill, background: "#161616", overflow: "hidden" }}>
-              <div style={{ width: `${xpPct}%`, height: "100%", background: GRAD.primary, borderRadius: DS.radius.pill }} />
-            </div>
-            <span style={{ fontFamily: head, fontSize: 10, fontWeight: 700, color: "#8a8a8a" }}>{xpNow}/{xpNeed}</span>
+          <div style={{ fontFamily: head, fontSize: 15, fontWeight: 600, color: "#9a9a9a" }}>Hey, {(profile?.name || "Explorer").split(" ")[0]} 👋</div>
+          <div style={{ fontFamily: head, fontSize: 34, fontWeight: 800, color: "#fff", lineHeight: 1.05, marginTop: 4, letterSpacing: -0.5 }}>
+            Explore your<br />creative city
           </div>
+        </div>
+        <div style={{ position: "relative", width: 52, height: 52, flexShrink: 0, marginLeft: 12 }}>
+          <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: GRAD.primary, padding: 2.5 }}>
+            <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: "#1a1a1a",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🧑🏾‍🎨</div>
+          </div>
+          <div style={{ position: "absolute", bottom: -2, right: -2, minWidth: 20, height: 20, padding: "0 5px", borderRadius: 10,
+            background: GRAD.violet, border: "2px solid #000", display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: head, fontWeight: 800, fontSize: 9.5, color: "#fff" }}>{currentLevel.n}</div>
         </div>
       </div>
 
-      {/* Daily quest streak card */}
-      <div style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: DS.pad.card, boxShadow: DS.shadow.card, marginBottom: 12 }}>
+      {/* HERO CARD — full width, the biggest element. The daily quest, given
+          the reference's large-feature-card treatment. */}
+      <div style={{ background: GRAD.violet, borderRadius: 26, padding: 20, boxShadow: DS.shadow.float, marginBottom: 12, position: "relative", overflow: "hidden" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontFamily: head, fontSize: 11, letterSpacing: 1, fontWeight: 700, background: GRAD.primary,
-            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>DAILY QUEST</span>
-          {streak?.count > 0 && <span style={{ fontFamily: head, fontSize: 12, fontWeight: 700, color: "#fff",
-            background: "#161616", borderRadius: DS.radius.pill, padding: "3px 10px" }}>🔥 {streak.count}</span>}
+          <span style={{ display: "inline-block", background: "#00000030", borderRadius: DS.radius.pill, padding: "5px 12px",
+            fontFamily: head, fontSize: 10.5, letterSpacing: 1, fontWeight: 700, color: "#fff" }}>DAILY QUEST</span>
+          {streak?.count > 0 && <span style={{ fontFamily: head, fontSize: 13, fontWeight: 800, color: "#fff",
+            background: "#00000030", borderRadius: DS.radius.pill, padding: "4px 12px" }}>🔥 {streak.count}</span>}
         </div>
-        <div style={{ fontFamily: head, fontSize: 18, fontWeight: 800, color: "#fff", marginTop: 6 }}>Discover {DAILY_TARGET} places</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
-          <div style={{ flex: 1, height: 8, borderRadius: DS.radius.pill, background: "#161616", overflow: "hidden" }}>
-            <div style={{ width: `${Math.min(100, (todayDiscoveries / DAILY_TARGET) * 100)}%`, height: "100%", background: GRAD.primary, borderRadius: DS.radius.pill }} />
+        <div style={{ fontFamily: head, fontSize: 26, fontWeight: 800, color: "#fff", marginTop: 14, letterSpacing: -0.3 }}>Discover 3 places</div>
+        <div style={{ fontFamily: body, fontSize: 13, color: "#ffffffcc", marginTop: 2 }}>Walk to real spots to complete today's quest.</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>
+          <div style={{ flex: 1, height: 10, borderRadius: DS.radius.pill, background: "#00000033", overflow: "hidden" }}>
+            <div style={{ width: `${Math.min(100, (todayDiscoveries / DAILY_TARGET) * 100)}%`, height: "100%", background: "#fff", borderRadius: DS.radius.pill }} />
           </div>
-          <span style={{ fontFamily: head, fontSize: 13, fontWeight: 700, color: "#8a8a8a" }}>{Math.min(todayDiscoveries, DAILY_TARGET)}/{DAILY_TARGET}</span>
+          <span style={{ fontFamily: head, fontSize: 15, fontWeight: 800, color: "#fff" }}>{Math.min(todayDiscoveries, DAILY_TARGET)}/{DAILY_TARGET}</span>
         </div>
       </div>
 
-      {/* Collection at a glance */}
-      <div style={{ fontFamily: head, fontSize: 11, letterSpacing: 1, color: "#8a8a8a", fontWeight: 700, margin: "6px 2px 8px" }}>YOUR COLLECTION</div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-        <StatCard value={heroStats?.discovered ?? 0} total={heroStats?.total ?? 0} label="PLACES" grad={GRAD.primary} />
-        <StatCard value={artistsCollected} total={artistsTotal} label="ARTISTS" grad={GRAD.warm} />
-        <StatCard value={xp} label="TOTAL XP" grad={GRAD.cool} />
+      {/* Circular info bubbles — the collection stats as round chips, the
+          reference's circular-info motif. */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, justifyContent: "space-between" }}>
+        {[
+          { value: heroStats?.discovered ?? 0, total: heroStats?.total ?? 0, label: "Places", grad: GRAD.primary },
+          { value: artistsCollected, total: artistsTotal, label: "Artists", grad: GRAD.warm },
+          { value: xp, label: "XP", grad: GRAD.cool },
+          { value: streak?.best ?? 0, label: "Best streak", grad: GRAD.sunset },
+        ].map((s, i) => (
+          <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 66, height: 66, borderRadius: "50%", background: s.grad, padding: 3, boxShadow: DS.shadow.chip }}>
+              <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: "#0E0E0E",
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ fontFamily: head, fontSize: 17, fontWeight: 800, color: "#fff", lineHeight: 1 }}>{s.value}</div>
+                {s.total != null && <div style={{ fontFamily: head, fontSize: 9, color: "#777" }}>of {s.total}</div>}
+              </div>
+            </div>
+            <div style={{ fontFamily: head, fontSize: 10, fontWeight: 700, color: "#8a8a8a", textAlign: "center" }}>{s.label}</div>
+          </div>
+        ))}
       </div>
 
-      {/* Walk here next */}
+      {/* Walk here next — a supporting card */}
       {nextDiscovery && (
         <div onClick={onGoToMap} style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: DS.pad.card,
           boxShadow: DS.shadow.card, marginBottom: 14, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
-          <div style={{ width: 46, height: 46, borderRadius: DS.radius.inner, background: GRAD.violet, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🧭</div>
+          <div style={{ width: 46, height: 46, borderRadius: "50%", background: GRAD.violet, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🧭</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 0.5, color: "#8a8a8a", fontWeight: 700 }}>WALK HERE NEXT</div>
-            <div style={{ fontFamily: head, fontSize: 15, fontWeight: 800, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nextDiscovery.node.name}</div>
+            <div style={{ fontFamily: head, fontSize: 16, fontWeight: 800, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nextDiscovery.node.name}</div>
           </div>
-          <div style={{ fontFamily: head, fontSize: 13, fontWeight: 700, color: "#C77DFF" }}>
+          <div style={{ fontFamily: head, fontSize: 14, fontWeight: 800, color: "#C77DFF" }}>
             {nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
           </div>
         </div>
@@ -1804,31 +1816,30 @@ function Home_({ profile, levels, xp = 0, streak, todayDiscoveries = 0, heroStat
       {/* Recent discoveries */}
       {recent.length > 0 && (
         <>
-          <div style={{ fontFamily: head, fontSize: 11, letterSpacing: 1, color: "#8a8a8a", fontWeight: 700, margin: "6px 2px 8px" }}>RECENT DISCOVERIES</div>
+          <div style={{ fontFamily: head, fontSize: 17, fontWeight: 800, color: "#fff", margin: "4px 2px 10px", letterSpacing: -0.3 }}>Recent discoveries</div>
           <div style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: "6px 4px", boxShadow: DS.shadow.card }}>
             {recent.map((r, i) => (
-              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px",
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
                 borderTop: i ? "1px solid #1a1a1a" : "none" }}>
-                <div style={{ width: 34, height: 34, borderRadius: "50%", background: CHIP_GRADS[i % CHIP_GRADS.length],
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📍</div>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: CHIP_GRADS[i % CHIP_GRADS.length],
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📍</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: head, fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name || "A place"}</div>
+                  <div style={{ fontFamily: head, fontSize: 14.5, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name || "A place"}</div>
                   <div style={{ fontFamily: body, fontSize: 11, color: "#8a8a8a" }}>{new Date(r.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>
                 </div>
-                <Check size={16} color="#4ADE80" />
+                <Check size={17} color="#4ADE80" />
               </div>
             ))}
           </div>
         </>
       )}
 
-      {/* Empty state — a first-time explorer with nothing yet */}
       {recent.length === 0 && (
-        <div onClick={onGoToMap} style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: 22, boxShadow: DS.shadow.card, textAlign: "center", cursor: "pointer" }}>
-          <div style={{ fontSize: 34 }}>🗺️</div>
-          <div style={{ fontFamily: head, fontSize: 16, fontWeight: 800, color: "#fff", marginTop: 8 }}>Your city is waiting</div>
-          <div style={{ fontFamily: body, fontSize: 12.5, color: "#8a8a8a", marginTop: 4, lineHeight: 1.5 }}>Head to the map and walk toward a glowing place to make your first discovery.</div>
-          <PillButton onClick={onGoToMap} style={{ marginTop: 14 }}>Open the map</PillButton>
+        <div onClick={onGoToMap} style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: 24, boxShadow: DS.shadow.card, textAlign: "center", cursor: "pointer" }}>
+          <div style={{ fontSize: 38 }}>🗺️</div>
+          <div style={{ fontFamily: head, fontSize: 18, fontWeight: 800, color: "#fff", marginTop: 8 }}>Your city is waiting</div>
+          <div style={{ fontFamily: body, fontSize: 13, color: "#8a8a8a", marginTop: 5, lineHeight: 1.5 }}>Head to the map and walk toward a glowing place to make your first discovery.</div>
+          <PillButton onClick={onGoToMap} style={{ marginTop: 16 }}>Open the map</PillButton>
         </div>
       )}
     </div>
