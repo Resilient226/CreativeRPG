@@ -356,18 +356,23 @@ function Toast({ text }) {
   if (!text) return null;
   return (
     <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 100,
-      background: T.panel, border: `2px solid ${T.gold}`, borderRadius: 14, padding: "10px 18px",
-      fontFamily: body, fontWeight: 700, fontSize: 13, color: T.textCream, boxShadow: "0 8px 24px #000a",
+      background: "#0E0E0E", borderRadius: DS.radius.chip, padding: "10px 18px",
+      fontFamily: body, fontWeight: 700, fontSize: 13, color: T.textCream, boxShadow: DS.shadow.float,
       maxWidth: 320, textAlign: "center" }}>{text}</div>
   );
 }
 function WoodPanel({ children, style }) {
-  return <div style={{ background: `linear-gradient(180deg, ${T.panel}, #150f09)`, border: `2px solid ${T.gold}`,
-    borderRadius: 16, boxShadow: "inset 0 0 0 1px #00000055", ...style }}>{children}</div>;
+  // Borderless floating card, matching the reference: no accent-color outline
+  // (that glowing-border look was the main thing making the app read as
+  // "neon-outlined" instead of the reference's clean cards-on-black). Every
+  // Home card uses this wrapper, so dropping the border here fixes them all
+  // at once — separation now comes from the soft shadow + the black gaps.
+  return <div style={{ background: "#0E0E0E", borderRadius: DS.radius.card,
+    boxShadow: DS.shadow.card, ...style }}>{children}</div>;
 }
 function Scroll({ children, style }) {
-  return <div style={{ background: `linear-gradient(180deg, ${T.cream}, ${T.parchmentDark})`, border: `3px solid ${T.wood}`,
-    borderRadius: 14, boxShadow: "0 4px 14px #00000044", color: T.textDark, ...style }}>{children}</div>;
+  return <div style={{ background: "#0E0E0E", borderRadius: DS.radius.card,
+    boxShadow: DS.shadow.card, color: T.textCream, ...style }}>{children}</div>;
 }
 function StatRow({ label, value, color }) {
   return (
@@ -398,7 +403,7 @@ function DetailsLog({ log, onAdd }) {
   const entries = (log || []).slice().sort((a, b) => b.date - a.date);
   return (
     <div style={{ marginTop: 10 }}>
-      <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: T.wood, letterSpacing: 0.5, marginBottom: 6 }}>
+      <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: T.textMuted, letterSpacing: 0.5, marginBottom: 6 }}>
         DETAILS LOG {entries.length > 0 && `· ${entries.length}`}
       </div>
       {entries.length === 0 && (
@@ -412,7 +417,7 @@ function DetailsLog({ log, onAdd }) {
       ))}
       <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
         <input value={draft} onChange={ev => setDraft(ev.target.value)} placeholder="Add a timestamped note…"
-          style={{ flex: 1, background: "#fffaf0", border: `2px solid ${T.wood}`, borderRadius: 9, padding: "8px 10px",
+          style={{ flex: 1, background: "#161616", border: "1px solid #2a2a2a", borderRadius: 9, padding: "8px 10px",
             color: T.textDark, fontSize: 12.5, outline: "none" }} />
         <button onClick={() => { if (draft.trim()) { onAdd(draft.trim()); setDraft(""); } }}
           style={{ padding: "0 14px", borderRadius: 9, border: "none", background: T.gold, color: T.ink, fontFamily: head, fontWeight: 700, fontSize: 12 }}>
@@ -1226,7 +1231,10 @@ export default function CreativeEmpireOS() {
       `}</style>
       <Toast text={toast} />
 
-      {tab === "home" && <Home_ quests={quests} goal={goal} energy={energy} onToggle={toggleQuest} onViewAll={() => setTab("quests")} profile={profile} levels={levels} playerMode={playerMode} xp={xp} />}
+      {tab === "home" && <Home_ profile={profile} levels={levels} xp={xp}
+        streak={streak} todayDiscoveries={todayDiscoveries} heroStats={heroStats}
+        nextDiscovery={nextDiscovery} checkIns={checkIns} graph={graph}
+        unlockedDiscoverables={unlockedDiscoverables} onGoToMap={() => setTab("map")} />}
       {tab === "quests" && <Quests_ quests={quests} onToggle={toggleQuest} />}
       {/* "Where should I walk next?" — the one question the map always answers.
           Hidden while an arrival card is up so the two never stack. */}
@@ -1491,7 +1499,7 @@ function Inventory_({ inventory, setInventory, onBack, flash }) {
       <BackHeader title="🖼️ Inventory" onBack={onBack} />
       <Scroll style={{ padding: 14, marginTop: 12 }}>
         <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{finished} finished · {inventory.length - finished} in progress</div>
-        <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630" }}>Regional festivals typically expect 15–20 finished pieces.</div>
+        <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted }}>Regional festivals typically expect 15–20 finished pieces.</div>
       </Scroll>
       <div style={{ margin: "16px 0 8px", fontFamily: head, fontSize: 12, fontWeight: 700, color: T.gold }}>ADD A PIECE</div>
       <Scroll style={{ padding: 14 }}>
@@ -1515,7 +1523,7 @@ function Inventory_({ inventory, setInventory, onBack, flash }) {
           </button>
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14 }}>{a.name}</div>
-            <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{a.size || "—"} · {a.price || "—"}</div>
+            <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>{a.size || "—"} · {a.price || "—"}</div>
           </div>
           <button onClick={() => remove(a.id)} style={{ background: "none", border: "none" }}><Trash2 size={16} color={T.rose} /></button>
         </Scroll>
@@ -1576,7 +1584,7 @@ function Calendar_({ quests, events, onBack }) {
                   padding: "1px 6px", borderRadius: 10 }}>×{it.count}</span>
               )}
             </div>
-            <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{it.sub}</div>
+            <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>{it.sub}</div>
           </div>
           <div style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: isUrgentDeadline(it.days) ? T.rose : T.gold }}>{it.raw}</div>
         </Scroll>
@@ -1608,11 +1616,11 @@ function Finances_({ financeLog, setFinanceLog, goal, setGoal, onBack, flash }) 
       <BackHeader title="💰 Finances" onBack={onBack} />
       <Scroll style={{ padding: 14, marginTop: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <div><div style={{ fontFamily: head, fontSize: 9, color: T.wood, fontWeight: 700 }}>INCOME</div>
+          <div><div style={{ fontFamily: head, fontSize: 9, color: T.textMuted, fontWeight: 700 }}>INCOME</div>
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: T.forestLight }}>${income.toLocaleString()}</div></div>
-          <div><div style={{ fontFamily: head, fontSize: 9, color: T.wood, fontWeight: 700 }}>EXPENSES</div>
+          <div><div style={{ fontFamily: head, fontSize: 9, color: T.textMuted, fontWeight: 700 }}>EXPENSES</div>
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: T.rose }}>${expenses.toLocaleString()}</div></div>
-          <div><div style={{ fontFamily: head, fontSize: 9, color: T.wood, fontWeight: 700 }}>TOWARD GOAL</div>
+          <div><div style={{ fontFamily: head, fontSize: 9, color: T.textMuted, fontWeight: 700 }}>TOWARD GOAL</div>
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18 }}>${goal.current.toLocaleString()}</div></div>
         </div>
         <div style={{ marginTop: 10 }}><Bar pct={(goal.current / goal.target) * 100} color={T.green} track="#00000022" /></div>
@@ -1630,7 +1638,7 @@ function Finances_({ financeLog, setFinanceLog, goal, setGoal, onBack, flash }) 
       {financeLog.map(f => (
         <Scroll key={f.id} style={{ padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div><div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{f.desc}</div>
-            <div style={{ fontFamily: body, fontSize: 10.5, color: "#5b4630" }}>{timeAgo(f.date)}</div></div>
+            <div style={{ fontFamily: body, fontSize: 10.5, color: T.textMuted }}>{timeAgo(f.date)}</div></div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: f.type === "income" ? T.forestLight : T.rose }}>
               {f.type === "income" ? "+" : "−"}${Number(f.amount).toLocaleString()}
@@ -1658,7 +1666,7 @@ function OpportunitiesPage_({ opps, onAccept, onDecline, onBack }) {
             <div style={{ fontFamily: head, fontWeight: 700, fontSize: 14.5, flex: 1 }}>{o.name}</div>
             <span style={{ fontFamily: head, fontSize: 8.5, padding: "3px 8px", borderRadius: 20, background: T.rose, color: "#fff" }}>{o.tag}</span>
           </div>
-          <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 5 }}>{o.note}</div>
+          <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, marginTop: 5 }}>{o.note}</div>
           <div style={{ display: "flex", gap: 12, marginTop: 7, fontFamily: body, fontSize: 11, fontWeight: 700 }}>
             <span style={{ color: T.forestLight }}>{o.budget}</span>
           </div>
@@ -1696,117 +1704,131 @@ function NavBtn({ icon: Icon, label, active, onClick }) {
 }
 
 /* ================= HOME (simplified — map lives on its own tab now) ================= */
-function Home_({ quests, goal, energy, onToggle, onViewAll, profile, levels, playerMode = "creator", xp = 0 }) {
-  const pct = Math.round((goal.current / goal.target) * 100);
-  const top3 = quests.filter(q => q.tier !== "ignore").slice(0, 3);
-  const primary = quests.find(q => q.tier === "primary");
+function Home_({ profile, levels, xp = 0, streak, todayDiscoveries = 0, heroStats, nextDiscovery, checkIns = {}, graph = { artists: {}, edges: {} }, unlockedDiscoverables = {}, onGoToMap }) {
   const currentLevel = levels.find(l => l.state === "current") || levels[0];
-  const questsDone = quests.filter(q => q.done).length;
+  const xpNow = currentLevel.xp ?? xp ?? 0;
+  const xpNeed = currentLevel.xpNeed ?? 2000;
+  const xpPct = Math.min(100, Math.round((xpNow / xpNeed) * 100));
+  const DAILY_TARGET = 3;
+
+  // Real collection counts from the knowledge graph + check-ins. Artists
+  // "collected" = verified artists with at least one of their artworks
+  // unlocked by the player.
+  const artistsTotal = Object.values(graph.artists || {}).filter(a => a.status === "verified").length;
+  const artistsCollected = Object.values(graph.artists || {}).filter(a => {
+    if (a.status !== "verified") return false;
+    const artworkIds = Object.values(graph.edges || {}).filter(e => e.type === "CREATED_BY" && e.to === a.id).map(e => e.from);
+    return artworkIds.some(id => unlockedDiscoverables[id]);
+  }).length;
+
+  // Recent discoveries — the last few check-ins, newest first.
+  const recent = Object.entries(checkIns)
+    .map(([id, v]) => ({ id, ...v }))
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 4);
+
+  const StatCard = ({ value, total, label, grad }) => (
+    <div style={{ flex: 1, background: "#0E0E0E", borderRadius: DS.radius.card, padding: "14px 12px", boxShadow: DS.shadow.card }}>
+      <div style={{ fontFamily: head, fontWeight: 800, fontSize: 22, background: grad, WebkitBackgroundClip: "text",
+        WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{value}{total != null && <span style={{ fontSize: 14, color: "#666", WebkitTextFillColor: "#666" }}>/{total}</span>}</div>
+      <div style={{ fontFamily: head, fontSize: 9.5, letterSpacing: 0.5, color: "#8a8a8a", marginTop: 2 }}>{label}</div>
+    </div>
+  );
+
   return (
-    <div>
-      <div style={{ display: "flex", gap: 10, padding: "16px 14px 8px" }}>
-        <div style={{ position: "relative", width: 54, height: 54, flexShrink: 0 }}>
-          <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: "#3a2f28",
-            border: `3px solid ${T.blue}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🧑🏾‍🎨</div>
-          <div style={{ position: "absolute", bottom: -4, right: -4, width: 24, height: 24, borderRadius: "50%",
-            background: T.gold, border: `2px solid ${T.ink}`, display: "flex", alignItems: "center", justifyContent: "center",
-            fontFamily: head, fontWeight: 800, fontSize: 10, color: T.ink }}>{currentLevel.n}</div>
-        </div>
-        <WoodPanel style={{ flex: 1, padding: "8px 12px" }}>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 16 }}>{profile?.name || "Artist"}</div>
-          <div style={{ fontFamily: body, fontSize: 11, color: T.green, fontWeight: 700 }}>{currentLevel.title}</div>
-          <div style={{ fontFamily: body, fontSize: 10, color: T.textMuted }}>
-            Lv {currentLevel.n} · {currentLevel.xp ?? 0}/{currentLevel.xpNeed ?? 2000} XP
+    <div style={{ padding: "16px 14px 90px", background: "#000", minHeight: "100vh" }}>
+      {/* Profile header — gradient avatar ring, name, level, XP-to-next bar */}
+      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 16 }}>
+        <div style={{ position: "relative", width: 60, height: 60, flexShrink: 0 }}>
+          <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: GRAD.primary, padding: 3 }}>
+            <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: "#1a1a1a",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>🧑🏾‍🎨</div>
           </div>
-        </WoodPanel>
+          <div style={{ position: "absolute", bottom: -2, right: -2, minWidth: 22, height: 22, padding: "0 5px", borderRadius: 11,
+            background: GRAD.violet, border: "2px solid #000", display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: head, fontWeight: 800, fontSize: 10, color: "#fff" }}>{currentLevel.n}</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 20, color: "#fff" }}>{profile?.name || "Explorer"}</div>
+          <div style={{ fontFamily: head, fontSize: 12, fontWeight: 700, background: GRAD.primary, WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{currentLevel.title}</div>
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, height: 6, borderRadius: DS.radius.pill, background: "#161616", overflow: "hidden" }}>
+              <div style={{ width: `${xpPct}%`, height: "100%", background: GRAD.primary, borderRadius: DS.radius.pill }} />
+            </div>
+            <span style={{ fontFamily: head, fontSize: 10, fontWeight: 700, color: "#8a8a8a" }}>{xpNow}/{xpNeed}</span>
+          </div>
+        </div>
       </div>
 
-      {playerMode === "creator" ? (
-        <WoodPanel style={{ margin: "6px 14px 0", padding: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <div>
-              <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: T.gold }}>MISSION</div>
-              <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18 }}>${goal.target.toLocaleString()} goal</div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <span style={{ fontFamily: head, fontWeight: 800, fontSize: 18, color: T.goldBright }}>${goal.current.toLocaleString()}</span>
-              <span style={{ fontFamily: body, fontSize: 12, color: T.textMuted }}> / ${goal.target.toLocaleString()}</span>
-            </div>
+      {/* Daily quest streak card */}
+      <div style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: DS.pad.card, boxShadow: DS.shadow.card, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontFamily: head, fontSize: 11, letterSpacing: 1, fontWeight: 700, background: GRAD.primary,
+            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>DAILY QUEST</span>
+          {streak?.count > 0 && <span style={{ fontFamily: head, fontSize: 12, fontWeight: 700, color: "#fff",
+            background: "#161616", borderRadius: DS.radius.pill, padding: "3px 10px" }}>🔥 {streak.count}</span>}
+        </div>
+        <div style={{ fontFamily: head, fontSize: 18, fontWeight: 800, color: "#fff", marginTop: 6 }}>Discover {DAILY_TARGET} places</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+          <div style={{ flex: 1, height: 8, borderRadius: DS.radius.pill, background: "#161616", overflow: "hidden" }}>
+            <div style={{ width: `${Math.min(100, (todayDiscoveries / DAILY_TARGET) * 100)}%`, height: "100%", background: GRAD.primary, borderRadius: DS.radius.pill }} />
           </div>
-          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ flex: 1 }}><Bar pct={pct} color={T.green} h={9} /></div>
-            <span style={{ fontFamily: head, fontWeight: 800, fontSize: 13, color: T.green }}>{pct}%</span>
+          <span style={{ fontFamily: head, fontSize: 13, fontWeight: 700, color: "#8a8a8a" }}>{Math.min(todayDiscoveries, DAILY_TARGET)}/{DAILY_TARGET}</span>
+        </div>
+      </div>
+
+      {/* Collection at a glance */}
+      <div style={{ fontFamily: head, fontSize: 11, letterSpacing: 1, color: "#8a8a8a", fontWeight: 700, margin: "6px 2px 8px" }}>YOUR COLLECTION</div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+        <StatCard value={heroStats?.discovered ?? 0} total={heroStats?.total ?? 0} label="PLACES" grad={GRAD.primary} />
+        <StatCard value={artistsCollected} total={artistsTotal} label="ARTISTS" grad={GRAD.warm} />
+        <StatCard value={xp} label="TOTAL XP" grad={GRAD.cool} />
+      </div>
+
+      {/* Walk here next */}
+      {nextDiscovery && (
+        <div onClick={onGoToMap} style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: DS.pad.card,
+          boxShadow: DS.shadow.card, marginBottom: 14, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" }}>
+          <div style={{ width: 46, height: 46, borderRadius: DS.radius.inner, background: GRAD.violet, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🧭</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 0.5, color: "#8a8a8a", fontWeight: 700 }}>WALK HERE NEXT</div>
+            <div style={{ fontFamily: head, fontSize: 15, fontWeight: 800, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nextDiscovery.node.name}</div>
           </div>
-        </WoodPanel>
-      ) : (
-        <WoodPanel style={{ margin: "6px 14px 0", padding: 14 }}>
-          <div style={{ fontFamily: head, fontSize: 10, letterSpacing: 1, color: T.gold }}>YOUR PARTICIPATION</div>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, marginTop: 3 }}>{xp} XP earned</div>
-          <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, marginTop: 4 }}>
-            Explore galleries, check in at real places, complete quests — every real thing you do here counts.
+          <div style={{ fontFamily: head, fontSize: 13, fontWeight: 700, color: "#C77DFF" }}>
+            {nextDiscovery.meters < 950 ? `${Math.round(nextDiscovery.meters)}m` : `${(nextDiscovery.meters / 1000).toFixed(1)}km`}
           </div>
-        </WoodPanel>
+        </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, margin: "10px 14px 0" }}>
-        <Scroll style={{ flex: 1, padding: "9px 10px", textAlign: "center" }}>
-          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1 }}>QUESTS DONE</div>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 20 }}>{questsDone}</div>
-          <div style={{ fontFamily: body, fontSize: 9, color: T.green, fontWeight: 700 }}>REAL PROGRESS</div>
-        </Scroll>
-        <Scroll style={{ flex: 1.3, padding: "9px 10px" }}>
-          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, textAlign: "center" }}>ENERGY</div>
-          <div style={{ display: "flex", gap: 2, justifyContent: "center", marginTop: 4 }}>
-            {Array.from({ length: 12 }).map((_, i) => <Zap key={i} size={11} fill={i < energy ? T.gold : "none"} color={i < energy ? T.gold : "#00000033"} />)}
+      {/* Recent discoveries */}
+      {recent.length > 0 && (
+        <>
+          <div style={{ fontFamily: head, fontSize: 11, letterSpacing: 1, color: "#8a8a8a", fontWeight: 700, margin: "6px 2px 8px" }}>RECENT DISCOVERIES</div>
+          <div style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: "6px 4px", boxShadow: DS.shadow.card }}>
+            {recent.map((r, i) => (
+              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px",
+                borderTop: i ? "1px solid #1a1a1a" : "none" }}>
+                <div style={{ width: 34, height: 34, borderRadius: "50%", background: CHIP_GRADS[i % CHIP_GRADS.length],
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📍</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: head, fontSize: 14, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name || "A place"}</div>
+                  <div style={{ fontFamily: body, fontSize: 11, color: "#8a8a8a" }}>{new Date(r.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</div>
+                </div>
+                <Check size={16} color="#4ADE80" />
+              </div>
+            ))}
           </div>
-          <div style={{ fontFamily: body, fontSize: 9, textAlign: "center", marginTop: 2 }}>{energy}/12</div>
-        </Scroll>
-        <WoodPanel style={{ flex: 1.3, padding: "9px 10px" }}>
-          <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, color: T.gold }}>TODAY'S FOCUS</div>
-          <div style={{ fontFamily: body, fontSize: 11, marginTop: 3, lineHeight: 1.3 }}>{primary ? primary.title : "All clear"}</div>
-        </WoodPanel>
-      </div>
+        </>
+      )}
 
-      <div style={{ margin: "16px 14px 0" }}>
-        <Scroll style={{ padding: 14 }}>
-          <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15, marginBottom: 8 }}>📋 TODAY'S TASKS</div>
-          {top3.map(q => (
-            <div key={q.id} style={{ display: "flex", gap: 10, padding: "9px 0", borderTop: `1px solid ${T.wood}33` }}>
-              <button onClick={() => onToggle(q.id)} style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0,
-                border: `2px solid ${T.wood}`, background: q.done ? T.green : "transparent",
-                display: "flex", alignItems: "center", justifyContent: "center", marginTop: 2 }}>
-                {q.done && <Check size={13} color="#fff" />}
-              </button>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{q.title}</div>
-                {q.completion != null && <div style={{ fontFamily: body, fontSize: 11, color: T.green, fontWeight: 700 }}>{q.completion}% complete</div>}
-                <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 1 }}>{q.why}</div>
-                {q.completion != null && <div style={{ marginTop: 5 }}><Bar pct={q.completion} color={T.green} track="#00000022" /></div>}
-              </div>
-              <div style={{ textAlign: "right", flexShrink: 0 }}>
-                <div style={{ fontFamily: head, fontWeight: 800, fontSize: 12, color: T.forestLight }}>{q.ev}</div>
-                <div style={{ fontFamily: body, fontSize: 10, color: T.rose, fontWeight: 700 }}>{q.due}</div>
-              </div>
-            </div>
-          ))}
-          <button onClick={onViewAll} style={{ width: "100%", marginTop: 10, padding: 10, borderRadius: 10, border: "none",
-            background: T.wood, color: T.textCream, fontFamily: head, fontWeight: 700, fontSize: 12 }}>VIEW ALL TASKS ▸</button>
-        </Scroll>
-      </div>
-
-      {primary && (
-        <div style={{ margin: "12px 14px 0" }}>
-          <Scroll style={{ padding: 14 }}>
-            <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15, marginBottom: 6 }}>⭐ WHY THIS MATTERS</div>
-            <div style={{ fontFamily: body, fontSize: 12.5, lineHeight: 1.5 }}>{primary.why}</div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-around", marginTop: 12 }}>
-              <MiniStep icon={Palette} label={primary.title.split("(")[0].trim()} />
-              <ChevronRight size={16} color={T.wood} />
-              <MiniStep icon={Trophy} label={primary.unlock || "Unlocks"} />
-              <ChevronRight size={16} color={T.wood} />
-              <MiniStep icon={DollarSign} label="Closer to $100k" />
-            </div>
-          </Scroll>
+      {/* Empty state — a first-time explorer with nothing yet */}
+      {recent.length === 0 && (
+        <div onClick={onGoToMap} style={{ background: "#0E0E0E", borderRadius: DS.radius.card, padding: 22, boxShadow: DS.shadow.card, textAlign: "center", cursor: "pointer" }}>
+          <div style={{ fontSize: 34 }}>🗺️</div>
+          <div style={{ fontFamily: head, fontSize: 16, fontWeight: 800, color: "#fff", marginTop: 8 }}>Your city is waiting</div>
+          <div style={{ fontFamily: body, fontSize: 12.5, color: "#8a8a8a", marginTop: 4, lineHeight: 1.5 }}>Head to the map and walk toward a glowing place to make your first discovery.</div>
+          <PillButton onClick={onGoToMap} style={{ marginTop: 14 }}>Open the map</PillButton>
         </div>
       )}
     </div>
@@ -3782,7 +3804,7 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
                   {node.sim && <span style={{ fontFamily: head, fontSize: 8.5, fontWeight: 800, letterSpacing: 0.5,
                     color: "#fff", background: T.purple, padding: "2px 7px", borderRadius: 6 }}>SIM</span>}
                 </div>
-                <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>
+                <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>
                   {node.kind === "person" ? node.type : node.kind === "milestone" ? "Milestone event" :
                     node.kind === "opportunity" ? node.tag : "Place"}
                 </div>
@@ -3804,25 +3826,25 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
               {(node.metContext || (node.connections && node.connections.length > 0)) && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 10 }}>
                   {node.metContext && (
-                    <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630" }}>
-                      <b style={{ color: T.wood }}>Met:</b> {node.metContext}
+                    <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted }}>
+                      <b style={{ color: T.textMuted }}>Met:</b> {node.metContext}
                     </div>
                   )}
                   {node.connections && node.connections.length > 0 && (
-                    <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630" }}>
-                      <b style={{ color: T.wood }}>Connected to:</b> {node.connections.join(", ")}
+                    <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted }}>
+                      <b style={{ color: T.textMuted }}>Connected to:</b> {node.connections.join(", ")}
                     </div>
                   )}
                 </div>
               )}
               {node.backstory && (
-                <div style={{ fontFamily: body, fontSize: 12.5, fontStyle: "italic", color: "#5b4630", marginTop: 10, lineHeight: 1.4 }}>
+                <div style={{ fontFamily: body, fontSize: 12.5, fontStyle: "italic", color: T.textMuted, marginTop: 10, lineHeight: 1.4 }}>
                   {node.backstory}
                 </div>
               )}
               {node.personality && (
                 <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#00000010" }}>
-                  <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: T.wood }}>WHAT YOU'VE NOTICED</div>
+                  <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: T.textMuted }}>WHAT YOU'VE NOTICED</div>
                   {generatePublicProfile(node.personality, node.relationshipMetrics).map((line, i) => (
                     <div key={i} style={{ fontFamily: body, fontSize: 12.5, marginTop: i === 0 ? 4 : 3, lineHeight: 1.4 }}>• {line}</div>
                   ))}
@@ -3841,9 +3863,9 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
                 <StatRow label="Trust" value={node.trust} color={node.color} />
                 <StatRow label="Interest" value={node.interest} color={T.gold} />
               </div>
-              <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>Last contact: {node.lastInteraction}</div>
+              <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>Last contact: {node.lastInteraction}</div>
               <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#00000010" }}>
-                <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: T.wood }}>CURRENT NEED</div>
+                <div style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: T.textMuted }}>CURRENT NEED</div>
                 <div style={{ fontFamily: body, fontSize: 13, marginTop: 3 }}>{node.needs}</div>
               </div>
               <DetailsLog log={node.detailsLog} onAdd={text => onAddDetail(node, text)} />
@@ -3890,8 +3912,8 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
                   <div style={{ background: "#00000012", borderRadius: 10, padding: "10px 12px", marginBottom: 12,
                     display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div>
-                      <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, color: T.wood }}>READINESS SCORE</div>
-                      <div style={{ fontFamily: body, fontSize: 10, color: "#5b4630" }}>How ready you are for this specific target</div>
+                      <div style={{ fontFamily: head, fontSize: 9, letterSpacing: 1, color: T.textMuted }}>READINESS SCORE</div>
+                      <div style={{ fontFamily: body, fontSize: 10, color: T.textMuted }}>How ready you are for this specific target</div>
                     </div>
                     <div style={{ fontFamily: head, fontWeight: 800, fontSize: 22,
                       color: readiness.pct >= 75 ? T.green : T.gold }}>
@@ -3908,7 +3930,7 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
                       <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: i ? `1px solid ${T.wood}22` : "none" }}>
                         {r.met ? <CheckCircle2 size={16} color={T.green} /> : <X size={16} color={T.rose} />}
                         <span style={{ fontFamily: body, fontSize: 13, fontWeight: r.met ? 500 : 700 }}>{r.label}</span>
-                        {r.detail && <span style={{ fontFamily: body, fontSize: 11, color: "#5b4630", marginLeft: "auto" }}>{r.detail}</span>}
+                        {r.detail && <span style={{ fontFamily: body, fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>{r.detail}</span>}
                       </div>
                     ))}
                   </div>
@@ -3927,7 +3949,7 @@ function NodeSheet({ node, onClose, onLogInteraction, onTrack, onDismiss, onRequ
 
           {node.kind === "opportunity" && (
             <>
-              <div style={{ fontFamily: body, fontSize: 12.5, color: "#5b4630", marginTop: 8, lineHeight: 1.5 }}>{node.note}</div>
+              <div style={{ fontFamily: body, fontSize: 12.5, color: T.textMuted, marginTop: 8, lineHeight: 1.5 }}>{node.note}</div>
               <div style={{ display: "flex", gap: 12, marginTop: 8, fontFamily: body, fontSize: 12, fontWeight: 700 }}>
                 <span style={{ color: T.forestLight }}>{node.budget}</span>
               </div>
@@ -4006,9 +4028,9 @@ function PlaceDetailSheet({ node, onClose, onEdit, onRequestDelete, onAddDetail,
 
   const Badge = ({ children, tone = "default" }) => (
     <span style={{
-      display: "inline-block", padding: "4px 11px", borderRadius: 20, fontFamily: head, fontSize: 10.5, fontWeight: 700,
-      background: tone === "accent" ? DISCOVERY_ACCENT : "#ffffff14",
-      color: tone === "accent" ? "#0A0A0A" : "#EDEDED",
+      display: "inline-block", padding: "5px 12px", borderRadius: DS.radius.pill, fontFamily: head, fontSize: 10.5, fontWeight: 700,
+      background: tone === "accent" ? GRAD.primary : "#ffffff14",
+      color: "#fff",
       border: tone === "accent" ? "none" : "1px solid #ffffff22",
     }}>{children}</span>
   );
@@ -4204,7 +4226,7 @@ function ConfirmDeleteModal({ node, onCancel, onConfirm }) {
         <Scroll style={{ padding: 20, textAlign: "center" }}>
           <div style={{ fontSize: 26 }}>🗑️</div>
           <div style={{ fontFamily: head, fontWeight: 800, fontSize: 16, marginTop: 6 }}>Remove {node.name}?</div>
-          <div style={{ fontFamily: body, fontSize: 12.5, color: "#5b4630", marginTop: 6, lineHeight: 1.4 }}>
+          <div style={{ fontFamily: body, fontSize: 12.5, color: T.textMuted, marginTop: 6, lineHeight: 1.4 }}>
             This removes them from your map for good. This can't be undone.
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
@@ -4227,14 +4249,14 @@ function IdeasSheet({ ideas, onClose }) {
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 17 }}>💡 Ideas</div>
             <button onClick={onClose} style={{ background: "none", border: "none" }}><X size={20} color={T.textDark} /></button>
           </div>
-          {ideas.length === 0 && <div style={{ fontFamily: body, fontSize: 13, color: "#5b4630" }}>Nothing saved yet — use + to add one.</div>}
+          {ideas.length === 0 && <div style={{ fontFamily: body, fontSize: 13, color: T.textMuted }}>Nothing saved yet — use + to add one.</div>}
           {ideas.map(idea => (
             <div key={idea.id} style={{ padding: "10px 0", borderTop: `1px solid ${T.wood}22` }}>
               <div style={{ fontFamily: body, fontSize: 13.5, lineHeight: 1.4 }}>{idea.text}</div>
               <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
                 {idea.tags.map(t => (
                   <span key={t} style={{ fontFamily: head, fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
-                    background: `${T.gold}30`, color: T.wood }}>{t}</span>
+                    background: `${T.gold}30`, color: T.textMuted }}>{t}</span>
                 ))}
                 <span style={{ fontFamily: body, fontSize: 10, color: "#8a7350", marginLeft: "auto" }}>{idea.date}</span>
               </div>
@@ -4252,7 +4274,7 @@ function Quests_({ quests, onToggle }) {
     { key: "primary", label: "Primary Objective", color: T.green },
     { key: "secondary", label: "Secondary", color: T.gold },
     { key: "optional", label: "Optional", color: T.textMuted },
-    { key: "ignore", label: "Ignore", color: "#6b5a3f" },
+    { key: "ignore", label: "Ignore", color: T.textMuted },
   ];
   return (
     <div style={{ padding: "18px 14px" }}>
@@ -4276,10 +4298,10 @@ function Quests_({ quests, onToggle }) {
                       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon size={16} color={q.color} /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{q.title}</div>
-                      <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 3 }}>{q.reasoning || q.why}</div>
+                      <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, marginTop: 3 }}>{q.reasoning || q.why}</div>
                       <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                         <span style={{ fontFamily: head, fontSize: 9, fontWeight: 700, color: q.color }}>{q.tag}</span>
-                        <span style={{ fontFamily: body, fontSize: 10, color: T.wood, fontWeight: 700 }}>REWARD: {q.ev}</span>
+                        <span style={{ fontFamily: body, fontSize: 10, color: T.textMuted, fontWeight: 700 }}>REWARD: {q.ev}</span>
                       </div>
                       {q.sourceUrl && (
                         <a href={q.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center",
@@ -4315,7 +4337,7 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15 }}>{badge.icon} {badge.name}</div>
-            <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>Participation Level {profileLevel.level} · {xp} XP total</div>
+            <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>Participation Level {profileLevel.level} · {xp} XP total</div>
           </div>
           <div style={{ fontFamily: head, fontWeight: 800, fontSize: 20, color: T.gold }}>{unlockedAchievements.length}</div>
         </div>
@@ -4350,7 +4372,7 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
             {skills.map(s => (
               <div key={s.k} style={{ marginBottom: 11 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontFamily: body, fontSize: 12, fontWeight: 700, marginBottom: 3 }}>
-                  <span>{s.label}</span><span style={{ color: "#5b4630" }}>Lv.{s.level} · {s.xp}/{s.need}</span>
+                  <span>{s.label}</span><span style={{ color: T.textMuted }}>Lv.{s.level} · {s.xp}/{s.need}</span>
                 </div>
                 <Bar pct={(s.xp / s.need) * 100} color={s.color} track="#00000022" />
               </div>
@@ -4376,7 +4398,7 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
                 </div>
                 <div style={{ paddingBottom: 14, flex: 1 }}>
                   <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13.5 }}>{t.n}. {t.title}</div>
-                  <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{t.sub}</div>
+                  <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>{t.sub}</div>
                   {t.state === "current" && (
                     <div style={{ marginTop: 8 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontFamily: head, fontSize: 10, fontWeight: 700, marginBottom: 3 }}>
@@ -4393,7 +4415,7 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
                           </div>
                         ))}
                       </div>
-                      <div style={{ fontFamily: body, fontSize: 10.5, color: "#5b4630", marginTop: 6, fontStyle: "italic" }}>
+                      <div style={{ fontFamily: body, fontSize: 10.5, color: T.textMuted, marginTop: 6, fontStyle: "italic" }}>
                         Different disciplines clear these differently — a mural artist and a gallery painter can both reach Level 5 through different work.
                       </div>
                     </div>
@@ -4420,7 +4442,7 @@ function Profile_({ confidence, onQuickAccess, skills, levels, generatedCount, o
                   <div style={{ fontSize: 18 }}>🏆</div>
                   <div>
                     <div style={{ fontFamily: head, fontWeight: 700, fontSize: 13 }}>{a.name}</div>
-                    <div style={{ fontFamily: body, fontSize: 11, color: "#5b4630" }}>{a.description}</div>
+                    <div style={{ fontFamily: body, fontSize: 11, color: T.textMuted }}>{a.description}</div>
                   </div>
                 </div>
               );
@@ -4503,7 +4525,7 @@ function AddSheet({ mode, setMode, form, setForm, debriefText, setDebriefText, o
                   borderRadius: 12, padding: "14px 10px", textAlign: "left" }}>
                   <div style={{ fontSize: 20 }}>{emoji}</div>
                   <div style={{ fontFamily: head, fontWeight: 800, fontSize: 14, marginTop: 4 }}>{label}</div>
-                  <div style={{ fontFamily: body, fontSize: 10.5, color: "#5b4630" }}>{sub}</div>
+                  <div style={{ fontFamily: body, fontSize: 10.5, color: T.textMuted }}>{sub}</div>
                 </button>
               ))}
             </div>
@@ -4511,10 +4533,10 @@ function AddSheet({ mode, setMode, form, setForm, debriefText, setDebriefText, o
 
           {mode === "debrief" && (
             <>
-              <div style={{ fontFamily: body, fontSize: 12, color: "#5b4630", marginBottom: 10 }}>Tell me naturally, like recapping to a friend.</div>
+              <div style={{ fontFamily: body, fontSize: 12, color: T.textMuted, marginBottom: 10 }}>Tell me naturally, like recapping to a friend.</div>
               <textarea value={debriefText} onChange={e => setDebriefText(e.target.value)} rows={3}
                 placeholder="e.g. Finished the painting, met a gallery owner, spent $180 on supplies…"
-                style={{ width: "100%", background: "#fffaf0", border: `2px solid ${T.wood}`, borderRadius: 10, padding: 12, color: T.textDark, fontSize: 14, outline: "none", resize: "none" }} />
+                style={{ width: "100%", background: "#161616", border: "1px solid #2a2a2a", borderRadius: 10, padding: 12, color: T.textCream, fontSize: 14, outline: "none", resize: "none" }} />
               <button onClick={onSubmitDebrief} style={{ width: "100%", marginTop: 14, padding: 13, borderRadius: 11, border: "none",
                 background: T.gold, color: T.ink, fontFamily: head, fontWeight: 800, fontSize: 14 }}>Log it</button>
               <div style={{ fontFamily: body, fontSize: 10, color: "#8a7350", textAlign: "center", marginTop: 9 }}>This actually asks the AI to read what happened — if the connection ever fails, it quietly falls back to simple keyword matching instead.</div>
@@ -4576,12 +4598,12 @@ function AddSheet({ mode, setMode, form, setForm, debriefText, setDebriefText, o
 function ChipSelect({ label, options, value, onChange }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.wood, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.textMuted, marginBottom: 6 }}>{label}</div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {options.map(o => (
           <button key={o.key} onClick={() => onChange(value === o.key ? "" : o.key)} style={{
             padding: "6px 11px", borderRadius: 20, fontFamily: body, fontSize: 11.5, fontWeight: 700,
-            border: `2px solid ${T.wood}`, background: value === o.key ? T.gold : "#fffaf0",
+            border: "1px solid #2a2a2a", background: value === o.key ? T.gold : "#161616",
             color: value === o.key ? T.ink : T.textDark }}>
             {o.label}
           </button>
@@ -4594,10 +4616,10 @@ function FormInput({ label, value, onChange, placeholder, type, area }) {
   const Comp = area ? "textarea" : "input";
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.wood, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.textMuted, marginBottom: 4 }}>{label}</div>
       <Comp value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type}
         rows={area ? 3 : undefined}
-        style={{ width: "100%", background: "#fffaf0", border: `2px solid ${T.wood}`, borderRadius: 10,
+        style={{ width: "100%", background: "#161616", border: "1px solid #2a2a2a", borderRadius: 10,
           padding: 10, color: T.textDark, fontSize: 14, outline: "none", resize: area ? "none" : undefined }} />
     </div>
   );
@@ -4626,7 +4648,7 @@ function MultiChipSelect({ label, options, values, onChange, max }) {
         {options.map(o => (
           <button key={o.key} onClick={() => toggle(o.key)} style={{
             padding: "6px 11px", borderRadius: 20, fontFamily: body, fontSize: 11.5, fontWeight: 700,
-            border: `2px solid ${T.wood}`, background: values.includes(o.key) ? T.gold : "#fffaf0",
+            border: "1px solid #2a2a2a", background: values.includes(o.key) ? T.gold : "#161616",
             color: values.includes(o.key) ? T.ink : T.textDark }}>
             {o.label}
           </button>
@@ -4693,7 +4715,7 @@ function Login_() {
           <div style={{ flex: 1, height: 1, background: T.wood, opacity: 0.4 }} />
         </div>
         <button onClick={google} disabled={busy} style={{ width: "100%", padding: 12, borderRadius: 11,
-          border: `2px solid ${T.wood}`, background: "#fffaf0", color: T.textDark, fontFamily: head,
+          border: "1px solid #2a2a2a", background: "#161616", color: T.textCream, fontFamily: head,
           fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           🔵 Continue with Google
         </button>
@@ -4743,20 +4765,20 @@ function Onboarding_({ onFinish }) {
       <Scroll style={{ padding: 18 }}>
         {step === 0 && (
           <>
-            <div style={{ fontFamily: body, fontSize: 12.5, color: "#5b4630", textAlign: "center", marginBottom: 14, lineHeight: 1.5 }}>
+            <div style={{ fontFamily: body, fontSize: 12.5, color: T.textMuted, textAlign: "center", marginBottom: 14, lineHeight: 1.5 }}>
               Two ways to use this — pick what fits you right now. You can't switch later in this version, so choose the one that's actually true today.
             </div>
             <button onClick={() => set("playerMode", "explorer")} style={{ width: "100%", textAlign: "left", padding: 14, borderRadius: 12, marginBottom: 10,
-              border: `3px solid ${a.playerMode === "explorer" ? T.gold : T.wood}`, background: a.playerMode === "explorer" ? `${T.gold}22` : "#fffaf0" }}>
+              border: `2px solid ${a.playerMode === "explorer" ? T.gold : "#2a2a2a"}`, background: a.playerMode === "explorer" ? `${T.gold}22` : "#161616" }}>
               <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15 }}>🧭 Explorer <span style={{ color: T.forestLight, fontSize: 11 }}>(Free)</span></div>
-              <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 4, lineHeight: 1.4 }}>
+              <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, marginTop: 4, lineHeight: 1.4 }}>
                 Discover art, visit galleries and museums, complete quests, earn XP and badges. For anyone who loves the scene, not just artists.
               </div>
             </button>
             <button onClick={() => set("playerMode", "creator")} style={{ width: "100%", textAlign: "left", padding: 14, borderRadius: 12,
-              border: `3px solid ${a.playerMode === "creator" ? T.gold : T.wood}`, background: a.playerMode === "creator" ? `${T.gold}22` : "#fffaf0" }}>
+              border: `2px solid ${a.playerMode === "creator" ? T.gold : "#2a2a2a"}`, background: a.playerMode === "creator" ? `${T.gold}22` : "#161616" }}>
               <div style={{ fontFamily: head, fontWeight: 800, fontSize: 15 }}>🎨 Creator</div>
-              <div style={{ fontFamily: body, fontSize: 11.5, color: "#5b4630", marginTop: 4, lineHeight: 1.4 }}>
+              <div style={{ fontFamily: body, fontSize: 11.5, color: T.textMuted, marginTop: 4, lineHeight: 1.4 }}>
                 A full artist profile, portfolio, AI-ranked opportunities, career analytics, and everything Explorer has too.
               </div>
             </button>
@@ -4771,20 +4793,20 @@ function Onboarding_({ onFinish }) {
                 <FormInput label="Years creating" value={a.yearsCreating} onChange={v => set("yearsCreating", v)} type="number" placeholder="e.g. 5" />
               </>
             )}
-            <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.wood, margin: "12px 0 6px" }}>
+            <div style={{ fontFamily: head, fontSize: 11, fontWeight: 700, color: T.textMuted, margin: "12px 0 6px" }}>
               Choose your avatar — this is who you'll see on the real map.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
               {AVATAR_OPTIONS.map(av => (
                 <button key={av.key} onClick={() => set("avatarModel", av.key)} style={{ padding: 4, borderRadius: 10,
                   border: `2.5px solid ${a.avatarModel === av.key ? T.gold : T.wood}`,
-                  background: a.avatarModel === av.key ? `${T.gold}22` : "#fffaf0" }}>
+                  background: a.avatarModel === av.key ? `${T.gold}22` : "#161616" }}>
                   <div style={{ width: "100%", height: 64, borderRadius: 6, overflow: "hidden", background: "#eee" }}>
                     {/* eslint-disable-next-line react/no-unknown-property */}
                     <model-viewer src={`/avatars/${av.key}.glb`} camera-orbit="0deg 75deg 2.2m" disable-zoom
                       interaction-prompt="none" style={{ width: "100%", height: "100%" }} />
                   </div>
-                  <div style={{ fontFamily: body, fontSize: 9, marginTop: 3, color: "#5b4630" }}>{av.label}</div>
+                  <div style={{ fontFamily: body, fontSize: 9, marginTop: 3, color: T.textMuted }}>{av.label}</div>
                 </button>
               ))}
             </div>
@@ -4802,7 +4824,7 @@ function Onboarding_({ onFinish }) {
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 30 }}>🧭</div>
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 18, marginTop: 6 }}>You're in, {a.name || "Explorer"}.</div>
-            <div style={{ fontFamily: body, fontSize: 13, color: "#5b4630", marginTop: 10, lineHeight: 1.5 }}>
+            <div style={{ fontFamily: body, fontSize: 13, color: T.textMuted, marginTop: 10, lineHeight: 1.5 }}>
               Start discovering — check in at real places, complete quests, and earn XP as you actually go explore the scene.
             </div>
           </div>
@@ -4853,7 +4875,7 @@ function Onboarding_({ onFinish }) {
             <div style={{ fontFamily: head, fontWeight: 800, fontSize: 24, color: T.gold, marginTop: 6 }}>
               Level {previewLevel.n} — {previewLevel.title}
             </div>
-            <div style={{ fontFamily: body, fontSize: 13, color: "#5b4630", marginTop: 10, lineHeight: 1.5 }}>
+            <div style={{ fontFamily: body, fontSize: 13, color: T.textMuted, marginTop: 10, lineHeight: 1.5 }}>
               This is a rough, self-reported estimate — not an audit of your career. It'll get more accurate as you actually play.
               {a.finishedWorks < 20 && " I've already queued a quest around finishing more work, since most opportunities expect 15–20 pieces."}
             </div>
