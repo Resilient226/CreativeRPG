@@ -2470,11 +2470,14 @@ function importantBuildingConfigs(districts) {
 
 function updateImportantBuildings(map, districts) {
   const configs = importantBuildingConfigs(districts);
-  // Footprint match squares: the vector-tile building whose polygon intersects
-  // this square gets promoted. ~28m is tight enough to catch one building,
-  // loose enough to survive slight coordinate offset between the pin and the
-  // tile polygon centroid.
-  const zones = configs.map(c => squareAround(c.lat, c.lng, 28));
+  // The match zone must be LARGER than the buildings it's meant to catch:
+  // MapLibre's "within" filter tests full CONTAINMENT, so a footprint bigger
+  // than the zone (or crossing its edge) is excluded — which is why a 28m
+  // square matched nothing and no building extruded. 70m reliably contains a
+  // typical building footprint. Trade-off: in a dense block it can also catch
+  // an adjacent footprint, but a visible-but-slightly-generous extrusion is
+  // far better than none, and the tiles have no per-building IDs to do better.
+  const zones = configs.map(c => squareAround(c.lat, c.lng, 70));
 
   try {
     if (!map.getLayer("important-building-3d")) {
@@ -2537,7 +2540,7 @@ const _originalBuildingFilters = new Map();
 function applyBuildingCutouts(map, districts) {
   const cutouts = [];
   districts.forEach(d => d.entities.forEach(e => {
-    if (e.important) cutouts.push(squareAround(e.lat, e.lng, 28));
+    if (e.important) cutouts.push(squareAround(e.lat, e.lng, 70));
   }));
   let layers = [];
   try { layers = (map.getStyle().layers || []).filter(l => l.type === "fill-extrusion" && l.id !== "important-building-3d"); } catch { return; }
@@ -2653,65 +2656,16 @@ function buildSparkleParticles(configs) {
 function _mPerDegLng(lat) { return 111320 * Math.cos(lat * Math.PI / 180); }
 
 function updateSparkles(map, districts) {
-  const configs = importantBuildingConfigs(districts); // already carries sparkle overrides
-  const key = configs.map(c => `${c.id}:${c.sparkleEnabled}:${c.sparkleDensity}:${c.sparkleRadius}`).join("|");
-
+  // The flat MapLibre-circle sparkles are retired — they could only lie on the
+  // ground plane, so they read as flat rings instead of floating up around the
+  // building. Sparkles are now REAL 3D particles in the Three.js scene (see the
+  // building layer's updateSparkles3D), driven from React. This just tears down
+  // the old flat layer if a previous build left it behind.
   try {
-    if (!map.getSource("sparkles")) {
-      map.addSource("sparkles", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({
-        id: "sparkle-layer", type: "circle", source: "sparkles",
-        paint: {
-          "circle-radius": ["get", "size"],
-          "circle-color": ["get", "color"],
-          "circle-opacity": ["get", "opacity"],
-          "circle-blur": 0.6, // soft glowing dots, not hard circles
-          "circle-pitch-alignment": "map",
-        },
-      });
-    }
-    // Rebuild the particle set only when the config actually changes.
-    if (key !== _sparkleConfigKey) {
-      _sparkleConfigKey = key;
-      _sparkleParticles = buildSparkleParticles(configs);
-    }
-    if (!_sparkleParticles || !_sparkleParticles.length) {
-      map.getSource("sparkles").setData({ type: "FeatureCollection", features: [] });
-      if (_sparkleRAF) { cancelAnimationFrame(_sparkleRAF); _sparkleRAF = null; }
-      return;
-    }
-    if (_sparkleRAF) return; // already animating
-
-    let last = 0;
-    const tick = (t) => {
-      // ~20fps is plenty for ambient sparkle and keeps mobile GPUs cool.
-      if (t - last > 50) {
-        last = t;
-        const time = t / 1000;
-        const src = map.getSource("sparkles");
-        if (!src) { _sparkleRAF = null; return; }
-        const feats = _sparkleParticles.map(p => {
-          const ang = p.orbitOffset + time * 0.25 * p.speed;                 // slow drift around
-          const mLatDeg = 111320, mLngDeg = _mPerDegLng(p.cLat) || 1;
-          const offR = p.radiusM * p.orbitR;
-          const dLat = (Math.sin(ang) * offR) / mLatDeg;
-          const dLng = (Math.cos(ang) * offR) / mLngDeg;
-          // independent fade in/out — sin on its own phase+speed, clamped ≥0
-          const fade = Math.max(0, Math.sin(p.fadePhase + time * p.fadeSpeed));
-          const opacity = 0.15 + fade * 0.7;
-          const size = p.sizeBase * (0.7 + 0.5 * Math.sin(p.seed + time * p.fadeSpeed * 1.3));
-          return {
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [p.cLng + dLng, p.cLat + dLat] },
-            properties: { size, opacity, color: p.color },
-          };
-        });
-        src.setData({ type: "FeatureCollection", features: feats });
-      }
-      _sparkleRAF = requestAnimationFrame(tick);
-    };
-    _sparkleRAF = requestAnimationFrame(tick);
-  } catch { /* sparkle is purely decorative — never break the map over it */ }
+    if (map.getLayer("sparkle-layer")) map.removeLayer("sparkle-layer");
+    if (map.getSource("sparkles")) map.removeSource("sparkles");
+  } catch { /* nothing to clean up */ }
+  if (_sparkleRAF) { cancelAnimationFrame(_sparkleRAF); _sparkleRAF = null; }
 }
 
 /**
@@ -2852,11 +2806,100 @@ function createBuildingModelsLayer() {
         const sizes = this.tourTrail.phases;
         this.tourTrail.particles.material.size = 0.35 + Math.sin(this._heroT * 3 + sizes[0]) * 0.15;
       }
+      // 3D sparkle animation: real particles in the scene (not flat map
+      // circles), rising and orbiting around important buildings with
+      // independent per-particle phase so they never sync. This is what makes
+      // the sparkles read as floating UP and around in 3D rather than lying
+      // flat on the ground.
+      if (this.sparkles) {
+        const pos = this.sparkles.geometry.attributes.position;
+        const alpha = this.sparkles.geometry.attributes.alpha;
+        const P = this.sparkleParticles;
+        for (let i = 0; i < P.length; i++) {
+          const p = P[i];
+          const t = this._heroT * p.speed;
+          const ang = p.orbitOffset + t * 0.5;
+          const orbit = p.orbitR;
+          // orbit in the local X/Y plane, RISE in Z (up), looping height
+          const z = 2 + ((p.riseBase + t * p.rise * 3) % 22); // climbs then wraps
+          pos.setXYZ(i, p.cx + Math.cos(ang) * orbit, p.cy + Math.sin(ang) * orbit, z);
+          // independent fade — brightest mid-rise, fading near top/bottom
+          const heightFade = Math.sin((z / 22) * Math.PI); // 0 at ground/top, 1 mid
+          alpha.setX(i, Math.max(0, heightFade * (0.4 + 0.6 * Math.abs(Math.sin(p.fadePhase + t * p.fadeSpeed)))));
+        }
+        pos.needsUpdate = true; alpha.needsUpdate = true;
+        this.sparkles.material.uniforms.uTime.value = this._heroT;
+      }
       this.renderer.resetState();
       this.renderer.render(this.scene, this.camera);
       this.map.triggerRepaint();
     },
-    // Converts a lat/lng into meter offsets from the layer's local origin
+    // Builds/refreshes the 3D sparkle particle cloud for all important
+    // buildings. Called from React when the important-location set changes.
+    updateSparkles3D(configs) {
+      // Tear down existing.
+      if (this.sparkles) { this.scene.remove(this.sparkles); this.sparkles.geometry.dispose(); this.sparkles.material.dispose(); this.sparkles = null; }
+      const P = [];
+      configs.forEach(c => {
+        if (c.sparkleEnabled === false) return;
+        const local = this.toLocalMeters(c.lng, c.lat);
+        const density = c.sparkleDensity || (c.hero ? 16 : 10);
+        const radius = c.sparkleRadius || 9;
+        const col = new THREE.Color(c.sparkleColor || c.color || "#FFD98A");
+        for (let i = 0; i < density; i++) {
+          P.push({
+            cx: local.x, cy: local.y,
+            orbitR: radius * (0.5 + Math.random() * 0.6),
+            orbitOffset: Math.random() * Math.PI * 2,
+            speed: (c.sparkleSpeed || 1) * (0.6 + Math.random() * 0.8),
+            rise: 0.5 + Math.random() * 0.9,
+            riseBase: Math.random() * 22,
+            fadePhase: Math.random() * Math.PI * 2,
+            fadeSpeed: 0.6 + Math.random() * 0.9,
+            size: 1.4 + Math.random() * 2.2,
+            col,
+          });
+        }
+      });
+      this.sparkleParticles = P;
+      if (!P.length) return;
+      const geo = new THREE.BufferGeometry();
+      const positions = new Float32Array(P.length * 3);
+      const colors = new Float32Array(P.length * 3);
+      const sizes = new Float32Array(P.length);
+      const alphas = new Float32Array(P.length);
+      P.forEach((p, i) => {
+        positions[i * 3] = p.cx; positions[i * 3 + 1] = p.cy; positions[i * 3 + 2] = 2;
+        colors[i * 3] = p.col.r; colors[i * 3 + 1] = p.col.g; colors[i * 3 + 2] = p.col.b;
+        sizes[i] = p.size; alphas[i] = 0;
+      });
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      geo.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+      geo.setAttribute("alpha", new THREE.BufferAttribute(alphas, 1));
+      // Soft round glowing points via a tiny shader — additive, so they read
+      // as light. Cheap: one draw call for every sparkle across the whole map.
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 } },
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+        vertexShader: `
+          attribute float size; attribute float alpha; attribute vec3 color;
+          varying float vAlpha; varying vec3 vColor;
+          void main(){ vAlpha=alpha; vColor=color;
+            vec4 mv = modelViewMatrix * vec4(position,1.0);
+            gl_PointSize = size * (300.0 / -mv.z);
+            gl_Position = projectionMatrix * mv; }`,
+        fragmentShader: `
+          varying float vAlpha; varying vec3 vColor;
+          void main(){ vec2 c = gl_PointCoord - vec2(0.5);
+            float d = length(c); if(d>0.5) discard;
+            float glow = smoothstep(0.5,0.0,d);
+            gl_FragColor = vec4(vColor, glow*vAlpha); }`,
+      });
+      this.sparkles = new THREE.Points(geo, mat);
+      this.sparkles.frustumCulled = false;
+      this.scene.add(this.sparkles);
+    },
     // (established by the first thing placed). Everything in the scene is
     // positioned in real meters relative to this point.
     toLocalMeters(lng, lat) {
@@ -3654,6 +3697,7 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   useEffect(() => {
     if (mapRef.current && mapReady) { updateEntityHighlights(mapRef.current, districts, interior?.id); applyBuildingCutouts(mapRef.current, districts); updateImportantBuildings(mapRef.current, districts); updateSparkles(mapRef.current, districts); }
     if (buildingLayerRef.current) buildingLayerRef.current.updateEntities(districts);
+    if (buildingLayerRef.current && buildingLayerRef.current.updateSparkles3D) buildingLayerRef.current.updateSparkles3D(importantBuildingConfigs(districts));
   }, [districts, mapReady, interior]);
 
   // Tapping the extruded 3D FOOTPRINT (not just the floating marker) opens the
