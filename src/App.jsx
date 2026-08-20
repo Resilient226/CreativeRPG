@@ -891,7 +891,18 @@ export default function CreativeEmpireOS() {
       icon: Palette, color: T.gold, category: "World Builder",
       note: `Published via World Builder — ${address}`,
       detailsLog: [], adminPlaced: true,
+      // A location you deliberately placed in World Builder IS an important
+      // Creative Place — so it gets the real-footprint 3D extrusion + sparkle
+      // treatment automatically, no model hand-placed. These are the
+      // configurable per-location fields from the spec; sane defaults now,
+      // editable per-place later. hero stays false unless promoted.
+      important: true, hero: false,
+      heightMeters: null,        // null → use the tile's real render_height
+      sparkleEnabled: true,
+      sparkleColor: null,        // null → category glow color
+      sparkleDensity: null, sparkleRadius: null, sparkleSpeed: null,
     }]);
+    flash(`✨ ${name} marked as an important Creative Place`);
   }
   function trackOpportunity(o) {
     setQuests(qs => [...qs, {
@@ -2406,22 +2417,122 @@ function squareAround(lat, lng, radiusMeters) {
 }
 
 /**
+ * IMPORTANT-BUILDING FOOTPRINT EXTRUSION (replaces the old GLB-cube approach).
+ *
+ * The old system dropped a generic model box on top of the real building,
+ * which buried itself inside the basemap's own extrusion. This instead uses
+ * the REAL footprint from the vector tiles: a dedicated fill-extrusion layer
+ * reads the same `building` source-layer polygons the basemap uses, but only
+ * renders the ones whose footprint sits under an important location — and
+ * extrudes THAT actual polygon (irregular shape preserved) to real height,
+ * or to an admin `heightMeters` override when the tile height is unreliable.
+ * The generic building layer is cut out at those spots so they don't
+ * double-render. Data-driven: mark important:true in World Builder and the
+ * correct footprint lights up automatically; no model is ever hand-placed.
+ *
+ * Hierarchy the height expression encodes: ordinary → basemap's short slab;
+ * important → real footprint at real/override height; hero → same, taller
+ * floor + stronger treatment layered on by the sparkle/halo systems.
+ */
+function importantBuildingConfigs(districts) {
+  // One config per important location, carrying the footprint anchor point
+  // and ALL the per-location overrides from the spec — height plus the full
+  // sparkle configuration, so a location marked important in World Builder
+  // drives its own 3D height and sparkle behavior data-driven, with sensible
+  // defaults when a field is left unset.
+  const configs = [];
+  districts.forEach(d => d.entities.forEach(e => {
+    if (!e.important) return;
+    const catColor = CATEGORY_MARKER_STYLE[getMarkerCategory(e)]?.glow || "#C77DFF";
+    configs.push({
+      id: e.id, lat: e.lat, lng: e.lng,
+      hero: !!e.hero,
+      heightMeters: e.heightMeters || null,          // admin override when tile height is unreliable
+      color: catColor,
+      // Sparkle config — per-location, all optional (defaults applied at use):
+      sparkleEnabled: e.sparkleEnabled !== false,    // on by default for important buildings
+      sparkleColor: e.sparkleColor || catColor,      // defaults to the category glow color
+      sparkleDensity: e.sparkleDensity || null,      // null → density default (hero gets more)
+      sparkleRadius: e.sparkleRadius || null,        // null → radius default (meters around the footprint)
+      sparkleSpeed: e.sparkleSpeed || null,          // null → speed default
+    });
+  }));
+  return configs;
+}
+
+function updateImportantBuildings(map, districts) {
+  const configs = importantBuildingConfigs(districts);
+  // Footprint match squares: the vector-tile building whose polygon intersects
+  // this square gets promoted. ~28m is tight enough to catch one building,
+  // loose enough to survive slight coordinate offset between the pin and the
+  // tile polygon centroid.
+  const zones = configs.map(c => squareAround(c.lat, c.lng, 28));
+
+  try {
+    if (!map.getLayer("important-building-3d")) {
+      // A dedicated extrusion layer over the SAME building source-layer the
+      // basemap uses — so it renders real footprints, not synthetic boxes.
+      map.addLayer({
+        id: "important-building-3d",
+        type: "fill-extrusion",
+        source: "openmaptiles",
+        "source-layer": "building",
+        minzoom: 14,
+        paint: {
+          // Height: admin override wins; otherwise the tile's own render_height;
+          // otherwise a sensible default so a footprint with no height data
+          // still pops instead of staying flat.
+          "fill-extrusion-height": ["coalesce", ["get", "render_height"], 18],
+          "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+          "fill-extrusion-color": "#C77DFF",
+          "fill-extrusion-opacity": 0.92,
+          "fill-extrusion-vertical-gradient": true,
+        },
+      });
+    }
+    // Only render footprints inside an important zone. If none, filter to
+    // nothing (a false filter) so the layer is empty rather than showing all
+    // buildings.
+    const filter = zones.length
+      ? ["within", { type: "MultiPolygon", coordinates: zones }]
+      : ["==", ["get", "render_height"], -99999];
+    map.setFilter("important-building-3d", filter);
+
+    // Per-location overrides (color + height) via a data-join: build a match
+    // expression keyed on nothing stable in the tile, so instead we drive
+    // color/height by which zone the feature falls in using nested "within"
+    // checks — one branch per important location.
+    if (zones.length) {
+      const heightExpr = ["case"];
+      const colorExpr = ["case"];
+      configs.forEach((c, i) => {
+        const inZone = ["within", { type: "Polygon", coordinates: zones[i].coordinates || zones[i] }];
+        // height: admin override, else tile render_height, else default
+        heightExpr.push(inZone, c.heightMeters != null ? c.heightMeters : ["coalesce", ["get", "render_height"], c.hero ? 26 : 18]);
+        colorExpr.push(inZone, c.color);
+      });
+      heightExpr.push(["coalesce", ["get", "render_height"], 18]); // fallback
+      colorExpr.push("#C77DFF");
+      map.setPaintProperty("important-building-3d", "fill-extrusion-height", heightExpr);
+      map.setPaintProperty("important-building-3d", "fill-extrusion-color", colorExpr);
+    }
+  } catch { /* tiles may not expose building geometry at this zoom — layer simply stays empty */ }
+}
+
+/**
  * Hides the basemap's own OSM building extrusions wherever an important
- * location has a real GLB building model — so the model REPLACES the generic
- * slab instead of standing on top of it. Works by filtering every
- * fill-extrusion layer with a "not within these cutout squares" expression;
- * each layer's original filter is preserved and AND-ed back in, so the style's
- * own filtering keeps working.
+ * location sits, so the promoted footprint (updateImportantBuildings) renders
+ * instead of the generic slab double-drawing under it. Same cutout mechanism
+ * as before, now keyed on important:true rather than a GLB model.
  */
 const _originalBuildingFilters = new Map();
 function applyBuildingCutouts(map, districts) {
   const cutouts = [];
   districts.forEach(d => d.entities.forEach(e => {
-    const style = CATEGORY_MARKER_STYLE[getMarkerCategory(e)];
-    if (style && style.buildingModel) cutouts.push(squareAround(e.lat, e.lng, 45));
+    if (e.important) cutouts.push(squareAround(e.lat, e.lng, 28));
   }));
   let layers = [];
-  try { layers = (map.getStyle().layers || []).filter(l => l.type === "fill-extrusion"); } catch { return; }
+  try { layers = (map.getStyle().layers || []).filter(l => l.type === "fill-extrusion" && l.id !== "important-building-3d"); } catch { return; }
   layers.forEach(l => {
     try {
       if (!_originalBuildingFilters.has(l.id)) _originalBuildingFilters.set(l.id, map.getFilter(l.id) || null);
@@ -2488,6 +2599,111 @@ function updateEntityHighlights(map, districts, selectedId) {
     // of reading as a glowing beam. The ground halo + the beam are the actual
     // "this is important" signal now, not an extruded box.
   } catch { /* non-critical visual layer — if this fails, markers still work fine on their own */ }
+}
+
+/**
+ * AMBIENT SPARKLE SYSTEM for important buildings — "there's something worth
+ * discovering here." Each important location spawns a small set of particles
+ * that drift slowly around it, fade in and out on INDEPENDENT, staggered
+ * timers (seeded per-particle so they never reset in unison), with subtle
+ * per-particle variation in size, opacity, speed and direction. Rendered as a
+ * single MapLibre circle layer fed by a GeoJSON source we update on a
+ * throttled rAF loop — one source, one draw call, cheap on mobile.
+ *
+ * Per-location config (all from World Builder data, all optional with sane
+ * defaults): sparkleEnabled, sparkleColor, sparkleDensity, sparkleRadius,
+ * sparkleSpeed.
+ */
+let _sparkleParticles = null; // built once per config set: [{baseLat,baseLng,seed,...}]
+let _sparkleConfigKey = "";
+let _sparkleRAF = null;
+function buildSparkleParticles(configs) {
+  const parts = [];
+  configs.forEach(c => {
+    if (c.sparkleEnabled === false) return;
+    const density = c.sparkleDensity || (c.hero ? 14 : 8); // hero locations sparkle more
+    const radiusM = c.sparkleRadius || 22;
+    for (let i = 0; i < density; i++) {
+      parts.push({
+        cLat: c.lat, cLng: c.lng, radiusM,
+        color: c.sparkleColor || c.color || "#FFD98A",
+        speed: (c.sparkleSpeed || 1) * (0.6 + Math.random() * 0.8), // per-particle speed variation
+        seed: Math.random() * Math.PI * 2,      // independent phase — staggered, never synced
+        orbitOffset: Math.random() * Math.PI * 2,
+        orbitR: 0.35 + Math.random() * 0.65,    // fraction of radius — spread through the volume
+        rise: 0.4 + Math.random() * 0.6,        // vertical drift factor
+        sizeBase: 1.6 + Math.random() * 2.4,    // size variation
+        fadePhase: Math.random() * Math.PI * 2, // independent fade timing
+        fadeSpeed: 0.5 + Math.random() * 0.7,
+      });
+    }
+  });
+  return parts;
+}
+
+// ~111,320 m per degree latitude; longitude scaled by cos(lat).
+function _mPerDegLng(lat) { return 111320 * Math.cos(lat * Math.PI / 180); }
+
+function updateSparkles(map, districts) {
+  const configs = importantBuildingConfigs(districts); // already carries sparkle overrides
+  const key = configs.map(c => `${c.id}:${c.sparkleEnabled}:${c.sparkleDensity}:${c.sparkleRadius}`).join("|");
+
+  try {
+    if (!map.getSource("sparkles")) {
+      map.addSource("sparkles", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: "sparkle-layer", type: "circle", source: "sparkles",
+        paint: {
+          "circle-radius": ["get", "size"],
+          "circle-color": ["get", "color"],
+          "circle-opacity": ["get", "opacity"],
+          "circle-blur": 0.6, // soft glowing dots, not hard circles
+          "circle-pitch-alignment": "map",
+        },
+      });
+    }
+    // Rebuild the particle set only when the config actually changes.
+    if (key !== _sparkleConfigKey) {
+      _sparkleConfigKey = key;
+      _sparkleParticles = buildSparkleParticles(configs);
+    }
+    if (!_sparkleParticles || !_sparkleParticles.length) {
+      map.getSource("sparkles").setData({ type: "FeatureCollection", features: [] });
+      if (_sparkleRAF) { cancelAnimationFrame(_sparkleRAF); _sparkleRAF = null; }
+      return;
+    }
+    if (_sparkleRAF) return; // already animating
+
+    let last = 0;
+    const tick = (t) => {
+      // ~20fps is plenty for ambient sparkle and keeps mobile GPUs cool.
+      if (t - last > 50) {
+        last = t;
+        const time = t / 1000;
+        const src = map.getSource("sparkles");
+        if (!src) { _sparkleRAF = null; return; }
+        const feats = _sparkleParticles.map(p => {
+          const ang = p.orbitOffset + time * 0.25 * p.speed;                 // slow drift around
+          const mLatDeg = 111320, mLngDeg = _mPerDegLng(p.cLat) || 1;
+          const offR = p.radiusM * p.orbitR;
+          const dLat = (Math.sin(ang) * offR) / mLatDeg;
+          const dLng = (Math.cos(ang) * offR) / mLngDeg;
+          // independent fade in/out — sin on its own phase+speed, clamped ≥0
+          const fade = Math.max(0, Math.sin(p.fadePhase + time * p.fadeSpeed));
+          const opacity = 0.15 + fade * 0.7;
+          const size = p.sizeBase * (0.7 + 0.5 * Math.sin(p.seed + time * p.fadeSpeed * 1.3));
+          return {
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [p.cLng + dLng, p.cLat + dLat] },
+            properties: { size, opacity, color: p.color },
+          };
+        });
+        src.setData({ type: "FeatureCollection", features: feats });
+      }
+      _sparkleRAF = requestAnimationFrame(tick);
+    };
+    _sparkleRAF = requestAnimationFrame(tick);
+  } catch { /* sparkle is purely decorative — never break the map over it */ }
 }
 
 /**
@@ -3435,9 +3651,48 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
   // (entered) one changes — same "important places draw attention" mechanism,
   // updated live rather than only set once.
   useEffect(() => {
-    if (mapRef.current && mapReady) { updateEntityHighlights(mapRef.current, districts, interior?.id); applyBuildingCutouts(mapRef.current, districts); }
+    if (mapRef.current && mapReady) { updateEntityHighlights(mapRef.current, districts, interior?.id); applyBuildingCutouts(mapRef.current, districts); updateImportantBuildings(mapRef.current, districts); updateSparkles(mapRef.current, districts); }
     if (buildingLayerRef.current) buildingLayerRef.current.updateEntities(districts);
   }, [districts, mapReady, interior]);
+
+  // Tapping the extruded 3D FOOTPRINT (not just the floating marker) opens the
+  // location panel — spec point 4. Registered once when the map is ready; the
+  // handler reads the latest districts via a ref so it always resolves against
+  // current data without re-binding. Resolves the tapped point to the nearest
+  // important entity whose footprint zone contains it.
+  const districtsRef = useRef(districts);
+  useEffect(() => { districtsRef.current = districts; }, [districts]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const onBuildingTap = (e) => {
+      const ents = districtsRef.current.flatMap(d => d.entities).filter(x => x.important && typeof x.lat === "number");
+      if (!ents.length) return;
+      // nearest important entity to the tap, within a generous footprint radius
+      let best = null, bestM = Infinity;
+      for (const ent of ents) {
+        const m = haversineDistanceKm(e.lngLat.lat, e.lngLat.lng, ent.lat, ent.lng) * 1000;
+        if (m < bestM) { bestM = m; best = ent; }
+      }
+      if (best && bestM < 45) { onSelect(best); } // ~45m: within the promoted footprint zone
+    };
+    // Layer-scoped click: only fires when the extruded footprint is actually hit.
+    let bound = false;
+    const tryBind = () => {
+      if (bound) return;
+      if (map.getLayer("important-building-3d")) {
+        map.on("click", "important-building-3d", onBuildingTap);
+        map.on("mouseenter", "important-building-3d", () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", "important-building-3d", () => { map.getCanvas().style.cursor = ""; });
+        bound = true;
+      }
+    };
+    tryBind();
+    // The layer is added lazily by updateImportantBuildings; if it wasn't there
+    // yet, bind on the next idle once it exists.
+    if (!bound) map.once("idle", tryBind);
+    return () => { try { map.off("click", "important-building-3d", onBuildingTap); } catch { /* layer already gone */ } };
+  }, [mapReady, onSelect]);
 
   // The player's own avatar — a real GPS-located marker, separate from entity
   // markers, that moves and rotates to face the direction of travel as real
