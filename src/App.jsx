@@ -1069,9 +1069,17 @@ export default function CreativeEmpireOS() {
   const DISCOVERY_ICON = { gallery: Palette, museum: Landmark, public_art: ImageIcon };
   const revealedDrops = getRevealedDrops(drops, playerPosition?.lat, playerPosition?.lng);
   const allNodes = [
-    ...visibleContacts, ...visiblePlaces, ...events,
+    ...visibleContacts,
+    // Real curated places are important Creative Places by definition — they
+    // get the footprint-extrusion + sparkle treatment. This backfills the
+    // important flag onto places that were created before the flag existed
+    // (Home, Peters Street Station, etc.), so existing saves light up too
+    // without needing to be re-added. Any place explicitly marked
+    // important:false stays ordinary.
+    ...visiblePlaces.map(p => ({ ...p, important: p.important !== false })),
+    ...events,
     ...opps.map(o => ({ ...o, kind: "opportunity" })),
-    ...discoveredLocations.map(l => ({ ...l, kind: "place", icon: DISCOVERY_ICON[l.category] || Palette, color: T.forestLight, discovered: true, name: l.name })),
+    ...discoveredLocations.map(l => ({ ...l, kind: "place", icon: DISCOVERY_ICON[l.category] || Palette, color: T.forestLight, discovered: true, name: l.name, important: true })),
     ...revealedDrops.map(d => ({ ...d, id: `${d.type}-${d.lat}-${d.lng}`, kind: "place", name: d.label, isCollectible: true, color: T.forestLight })),
     { id: "ideas-hub", kind: "idea", name: "Ideas", icon: Lightbulb, color: T.gold, pos: { x: 46, y: 40 } },
   ];
@@ -3295,36 +3303,29 @@ const HERO_ARRIVAL = {
  *  never disagree about what's important. */
 function isHeroNode(n) {
   if (!n || typeof n.lat !== "number" || typeof n.lng !== "number") return false;
-  const cat = getMarkerCategory(n);
-  return !!(cat && CATEGORY_MARKER_STYLE[cat] && CATEGORY_MARKER_STYLE[cat].buildingModel);
+  // A "hero"/arrival-eligible node is now any important Creative Place —
+  // the same flag that drives the footprint extrusion + sparkles. This keeps
+  // arrival XP, discovery counting, and the compass all keyed to the exact
+  // same set of places the player sees lit up in the world.
+  return !!n.important;
 }
 
 const CATEGORY_MARKER_STYLE = {
-  gallery: { glow: "#D9A441", emoji: "🖼️", buildingModel: "building-a" },
-  museum: { glow: "#5B8FD9", emoji: "🏛️", buildingModel: "building-b" },
-  public_art: { glow: "#C25BD9", emoji: "🎨", buildingModel: "building-c" },
-  venue: { glow: "#E0955B", emoji: "☕", buildingModel: "building-d" },
+  // buildingModel has been REMOVED from every category. The old GLB toy-model
+  // system is retired — the footprint-extrusion + sparkle system (driven by
+  // important:true, see updateImportantBuildings/updateSparkles) is now the
+  // ONLY 3D building treatment. These styles now carry just the glow color +
+  // emoji for the beam/pin marker; the real building is the extruded vector
+  // footprint, not a model. isHeroNode() now reads e.important, not this.
+  gallery: { glow: "#D9A441", emoji: "🖼️" },
+  museum: { glow: "#5B8FD9", emoji: "🏛️" },
+  public_art: { glow: "#C25BD9", emoji: "🎨" },
+  venue: { glow: "#E0955B", emoji: "☕" },
   milestone: { glow: "#F0567A", emoji: "🎉" },
   collectible: { glow: "#5BD9B0", emoji: "✨" },
   person: { glow: "#5BD9E8", emoji: "🧑" },
   opportunity: { glow: "#D9A441", emoji: "🎯" },
-  // "place" is the CATCH-ALL for any real entity that isn't one of the four
-  // true hero categories above — it exists so nothing renders totally
-  // unstyled, NOT to grant hero status. It previously carried a buildingModel,
-  // which meant every generic/default location silently got a full 3D hero
-  // building, glow, gem, and even hero-category arrival XP — exactly what the
-  // design doc's "generic buildings: no glow, no labels" rule forbids. It gets
-  // a lightweight beam+pin for wayfinding only; isHeroNode() reads this same
-  // buildingModel field, so this one change also correctly excludes generic
-  // places from hero XP/streak counting.
-  // CORRECTION: "place" is not a generic filler category — it's the ONLY kind
-  // World Builder ever assigns to a manually-added real location (Home, The
-  // James Room, murals, venues — everything Zak actually builds). An earlier
-  // change nulled this out, thinking it was catching random/default noise;
-  // it was actually stripping the 3D building from every real curated
-  // location in the app simultaneously. Restored, and correctly: these are
-  // real hero locations and should count for arrival XP/streak too.
-  place: { glow: "#D9A441", emoji: "📍", buildingModel: "building-e" },
+  place: { glow: "#D9A441", emoji: "📍" },
 };
 function CustomCategoryMarker({ category, onClick, label, selected = false }) {
   const style = CATEGORY_MARKER_STYLE[category] || CATEGORY_MARKER_STYLE.gallery;
