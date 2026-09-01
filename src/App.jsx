@@ -935,7 +935,7 @@ export default function CreativeEmpireOS() {
         temperament: node.temperament || "", met: node.metContext || "",
         connections: (node.connections || []).join(", "), note: node.needs, details: "" });
     } else if (node.kind === "place") {
-      setEditForm({ name: node.name, category: node.category || "", note: node.note, details: "" });
+      setEditForm({ name: node.name, category: node.category || "", note: node.note, details: "", photo: node.photo || node.imageUrl || "" });
     } else if (node.kind === "milestone") {
       setEditForm({ name: node.name, category: node.category || "", days: node.daysLeft ?? "",
         budget: node.budget || "", note: node.note || "", details: "" });
@@ -960,6 +960,7 @@ export default function CreativeEmpireOS() {
       setPlaces(ps => ps.map(p => p.id !== node.id ? p : {
         ...p, name: editForm.name, category: cat ? cat.label : p.category,
         icon: cat ? cat.icon : p.icon, color: cat ? cat.color : p.color,
+        photo: editForm.photo || p.photo || "",
         note: editForm.note || p.note, detailsLog: newEntry ? [...(p.detailsLog || []), newEntry] : (p.detailsLog || []),
       }));
     } else if (node.kind === "milestone") {
@@ -2527,6 +2528,33 @@ function updateImportantBuildings(map, districts) {
       map.setPaintProperty("important-building-3d", "fill-extrusion-height", heightExpr);
       map.setPaintProperty("important-building-3d", "fill-extrusion-color", colorExpr);
     }
+
+    // DIAGNOSTIC — the honest way to know why nothing extrudes. After the
+    // layer is configured, query the actually-rendered building features at
+    // the first important location's screen point and record: does the tile
+    // even HAVE a building polygon there, and does it carry render_height?
+    // Surfaced via window so the UI can show it. This is temporary
+    // instrumentation to replace guessing with a real answer.
+    if (configs.length) {
+      try {
+        const c0 = configs[0];
+        const pt = map.project([c0.lng, c0.lat]);
+        const box = [[pt.x - 40, pt.y - 40], [pt.x + 40, pt.y + 40]];
+        const srcFeats = map.querySourceFeatures("openmaptiles", { sourceLayer: "building" });
+        const renderedAll = map.queryRenderedFeatures(box);
+        const buildingsHere = renderedAll.filter(f => f.sourceLayer === "building");
+        const importantLayer = renderedAll.filter(f => f.layer && f.layer.id === "important-building-3d");
+        const sampleHeight = buildingsHere[0] ? buildingsHere[0].properties.render_height : "none";
+        window.__rpgBuildingDiag = {
+          importantCount: configs.length,
+          buildingSourceFeatures: srcFeats.length,
+          buildingsAtPin: buildingsHere.length,
+          importantLayerRendered: importantLayer.length,
+          sampleRenderHeight: sampleHeight,
+          zoom: Math.round(map.getZoom() * 10) / 10,
+        };
+      } catch (e) { window.__rpgBuildingDiag = { error: String(e && e.message) }; }
+    }
   } catch { /* tiles may not expose building geometry at this zoom — layer simply stays empty */ }
 }
 
@@ -3964,6 +3992,15 @@ function WorldEngine_({ nodes, onSelect, onShowIdeas, homeBase, playerPosition, 
         borderRadius: 8, padding: "3px 9px", fontFamily: head, fontSize: 9.5, fontWeight: 700, color: "#fff" }}>
         {tier === "district" ? "DISTRICT VIEW" : tier === "building" ? "BUILDING VIEW" : "INTERIOR"}
       </div>
+      {/* TEMP diagnostic — tap to see what the map actually detects for
+          important-building extrusion. Remove once the extrusion is confirmed. */}
+      <button onClick={() => {
+        const d = window.__rpgBuildingDiag;
+        alert(d ? `important:${d.importantCount}\nbuilding source feats:${d.buildingSourceFeatures}\nbuildings at pin:${d.buildingsAtPin}\nimportant layer rendered:${d.importantLayerRendered}\nsample render_height:${d.sampleRenderHeight}\nzoom:${d.zoom}` : "No diagnostic yet — move near an important building first.");
+      }} style={{ position: "absolute", top: 92, right: 10, background: "#C77DFF", border: "none",
+        borderRadius: 8, padding: "4px 9px", fontFamily: head, fontSize: 9.5, fontWeight: 800, color: "#000" }}>
+        🔍 DIAG
+      </button>
     </div>
   );
 }
@@ -4351,10 +4388,30 @@ function PlaceDetailSheet({ node, onClose, onEdit, onRequestDelete, onAddDetail,
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, maxHeight: "88vh", overflow: "auto",
         background: "#0F0F0F", borderTopLeftRadius: DS.radius.card, borderTopRightRadius: DS.radius.card, border: "1px solid #ffffff12", borderBottom: "none", boxShadow: DS.shadow.float }}>
 
-        {/* Header: photo-style hero panel. No real per-place photo asset
-            exists yet, so this is a dark gradient icon panel — same
-            treatment the mockup's photo header gives, honestly standing in
-            for a photo the app doesn't have. */}
+        {/* Header: real photo when the place has one, else the gradient-icon
+            placeholder. A single real image per place is the biggest single
+            step toward the reference look — the mockups all lead with photography. */}
+        {(node.photo || node.imageUrl) ? (
+          <div style={{ position: "relative", height: 190, borderTopLeftRadius: DS.radius.card, borderTopRightRadius: DS.radius.card, overflow: "hidden" }}>
+            <img src={node.photo || node.imageUrl} alt={node.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 30%, transparent 55%, rgba(15,15,15,0.95) 100%)" }} />
+            <button onClick={onClose} style={{ position: "absolute", top: 14, left: 14, width: 32, height: 32, borderRadius: "50%",
+              background: "#00000088", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <X size={16} color="#fff" />
+            </button>
+            <div style={{ position: "absolute", top: 14, right: 14, display: "flex", gap: 6 }}>
+              <button onClick={() => onEdit(node)} style={{ width: 32, height: 32, borderRadius: "50%", background: "#00000088", border: "none",
+                display: "flex", alignItems: "center", justifyContent: "center" }}><Edit3 size={14} color="#fff" /></button>
+              <button onClick={() => onRequestDelete(node)} style={{ width: 32, height: 32, borderRadius: "50%", background: "#00000088", border: "none",
+                display: "flex", alignItems: "center", justifyContent: "center" }}><Trash2 size={14} color="#ff6b6b" /></button>
+            </div>
+            <div style={{ position: "absolute", left: 18, right: 18, bottom: 14 }}>
+              {node.category && <span style={{ display: "inline-block", background: GRAD.primary, borderRadius: DS.radius.pill,
+                padding: "4px 11px", fontFamily: head, fontSize: 10, fontWeight: 700, color: "#fff", marginBottom: 7 }}>{node.category}</span>}
+              <div style={{ fontFamily: head, fontWeight: 800, fontSize: 24, color: "#fff", textShadow: "0 2px 12px rgba(0,0,0,0.6)", lineHeight: 1.05 }}>{node.name}</div>
+            </div>
+          </div>
+        ) : (
         <div style={{ position: "relative", height: 150, background: `linear-gradient(160deg, ${node.color || "#333"}33, #0A0A0A 85%)`,
           borderTopLeftRadius: DS.radius.card, borderTopRightRadius: DS.radius.card, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Icon size={44} color={node.color || DISCOVERY_ACCENT} style={{ opacity: 0.85 }} />
@@ -4369,6 +4426,7 @@ function PlaceDetailSheet({ node, onClose, onEdit, onRequestDelete, onAddDetail,
               display: "flex", alignItems: "center", justifyContent: "center" }}><Trash2 size={14} color="#ff6b6b" /></button>
           </div>
         </div>
+        )}
 
         <div style={{ padding: "16px 18px 26px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -4505,6 +4563,7 @@ function EditSheet({ node, form, setForm, onClose, onSave }) {
               <FormInput label="Name" value={form.name} onChange={v => set("name", v)} />
               <ChipSelect label="Category" options={PLACE_CATEGORIES.map(c => ({ key: c.key, label: c.label }))}
                 value={PLACE_CATEGORIES.find(c => c.label === form.category)?.key || ""} onChange={v => set("category", PLACE_CATEGORIES.find(c => c.key === v)?.label || v)} />
+              <FormInput label="Photo URL" value={form.photo} onChange={v => set("photo", v)} />
               <FormInput label="Note" value={form.note} onChange={v => set("note", v)} area />
               <FormInput label="Other details" value={form.details} onChange={v => set("details", v)} area />
             </>
