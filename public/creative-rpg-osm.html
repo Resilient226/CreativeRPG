@@ -186,11 +186,16 @@ function addBuilding(el){const g=el.geometry;if(!g||g.length<3)return;const shap
 function addRoad(el){const g=el.geometry;if(!g||g.length<2)return;const pts=g.map(pt=>new T.Vector3(toX(pt.lon),0.12,toZ(pt.lat)));scene.add(new T.Line(new T.BufferGeometry().setFromPoints(pts),new T.LineBasicMaterial({color:0x9AA3B2})));}
 
 const status=document.getElementById('status');
-const Q=`[out:json][timeout:60];(way["building"](${BBOX.join(',')});relation["building"](${BBOX.join(',')});way["highway"](${BBOX.join(',')}););out geom;`;
-const MIRRORS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.private.coffee/api/interpreter'];
-async function load(){let data=null,err='';for(const url of MIRRORS){try{status.innerHTML='Loading from <b>'+url.split('/')[2]+'</b>…';const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(Q),headers:{'Content-Type':'application/x-www-form-urlencoded'}});if(!r.ok){err='HTTP '+r.status;continue;}data=await r.json();break;}catch(e){err=String(e&&e.message||e);}}
-  if(!data){document.getElementById('errmsg').textContent='Error: '+err+'.';document.getElementById('err').style.display='block';status.style.display='none';return;}
+const Q=`[out:json][timeout:25];(way["building"](${BBOX.join(',')});way["highway"](${BBOX.join(',')}););out geom;`;
+const MIRRORS=['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+function showErr(m){document.getElementById('errmsg').textContent='Error: '+m+'. Tap this box to reload and try again.';document.getElementById('err').style.display='block';status.style.display='none';}
+document.getElementById('err').onclick=()=>location.reload();
+async function fetchT(url,body,ms){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),ms);try{return await fetch(url,{method:'POST',body,headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ctl.signal});}finally{clearTimeout(t);}}
+async function load(){const body='data='+encodeURIComponent(Q);let data=null,err='';
+  for(const url of MIRRORS){const host=url.split('/')[2];try{status.innerHTML='Loading map · <b>'+host+'</b>';const r=await fetchT(url,body,15000);if(!r.ok){err='HTTP '+r.status+' @'+host;continue;}const j=await r.json();if(j&&j.elements&&j.elements.length){data=j;break;}err='no data @'+host;}catch(e){err=(e&&e.name==='AbortError'?'timeout':String(e&&e.message||e))+' @'+host;}}
+  if(!data){showErr(err);return;}
   let nB=0;(data.elements||[]).forEach(el=>{const t=el.tags||{};if(t.building){addBuilding(el);nB++;}else if(t.highway)addRoad(el);});
+  if(!nB){showErr('0 buildings returned');return;}
   status.innerHTML='✓ <b>'+nB+'</b> real buildings — Castleberry Hill';setTimeout(()=>{status.style.transition='opacity .6s';status.style.opacity='0';},2400);
   snapPlaces(); buildWorld();}
 function snapPlaces(){PLACES.forEach(p=>{let best=null,bd=80;BUILDINGS.forEach(b=>{const d=Math.hypot(b.cx-p.x,b.cz-p.z);if(d<bd){bd=d;best=b;}});if(best){p.x=best.cx;p.z=best.cz;p.bh=best.h;}else p.bh=10;});}
@@ -229,7 +234,6 @@ function buildWorld(){
     const el=document.createElement('div');el.className='marker';const hex='#'+p.color.toString(16).padStart(6,'0');el.innerHTML='<div class="mico" style="background:linear-gradient(135deg,'+hex+','+shade(hex,.7)+')">'+catIcon(p.badge,20)+'</div><div class="mdist">—</div>';el.onclick=()=>{if(St.discovered[p.id])openSheet(p);else autoTarget={x:p.x,z:p.z};};document.getElementById('markers').appendChild(el);p.markerEl=el;
   });
   document.getElementById('hint').classList.add('show');
-  requestAnimationFrame(frame);
 }
 
 // joystick + keys
@@ -304,7 +308,7 @@ document.getElementById('scanfab').onclick=function(){if(this._p)openScan(this._
 document.getElementById('scancel').onclick=closeScan;
 document.getElementById('sdone').onclick=()=>{const p=scanP;closeScan();if(!p)return;p.scanned=true;p.captures=(p.captures||0)+1;p.accuracy=Math.min(100,p.captures*34);if(p.muralMesh){p.muralMesh.material.map=muralArt('affirm',true);p.muralMesh.material.needsUpdate=true;}if(!St.discovered[p.id])discover(p);St.xp+=25;while(St.xp>=xpNext(St.level)){St.xp-=xpNext(St.level);St.level++;toast('✦ Level '+St.level+'!');}updateHUD();toast(p.accuracy>=100?'✦ Mural depiction complete!':'✦ Depiction updated · '+p.accuracy+'%');};
 
-updateHUD(); load();
+updateHUD(); requestAnimationFrame(frame); load();
 })();
 </script>
 </body>
