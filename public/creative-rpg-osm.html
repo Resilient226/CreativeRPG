@@ -187,17 +187,26 @@ function addRoad(el){const g=el.geometry;if(!g||g.length<2)return;const pts=g.ma
 
 const status=document.getElementById('status');
 const Q=`[out:json][timeout:25];(way["building"](${BBOX.join(',')});way["highway"](${BBOX.join(',')}););out geom;`;
-const MIRRORS=['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+const MIRRORS=['https://overpass.kumi.systems/api/interpreter','https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.osm.jp/api/interpreter'];
+const CK='osm_'+BBOX.join('_');
 function showErr(m){document.getElementById('errmsg').textContent='Error: '+m+'. Tap this box to reload and try again.';document.getElementById('err').style.display='block';status.style.display='none';}
 document.getElementById('err').onclick=()=>location.reload();
-async function fetchT(url,body,ms){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),ms);try{return await fetch(url,{method:'POST',body,headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ctl.signal});}finally{clearTimeout(t);}}
-async function load(){const body='data='+encodeURIComponent(Q);let data=null,err='';
-  for(const url of MIRRORS){const host=url.split('/')[2];try{status.innerHTML='Loading map · <b>'+host+'</b>';const r=await fetchT(url,body,15000);if(!r.ok){err='HTTP '+r.status+' @'+host;continue;}const j=await r.json();if(j&&j.elements&&j.elements.length){data=j;break;}err='no data @'+host;}catch(e){err=(e&&e.name==='AbortError'?'timeout':String(e&&e.message||e))+' @'+host;}}
-  if(!data){showErr(err);return;}
-  let nB=0;(data.elements||[]).forEach(el=>{const t=el.tags||{};if(t.building){addBuilding(el);nB++;}else if(t.highway)addRoad(el);});
+function fetchT(url,body,ms){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),ms);
+  return fetch(url,{method:'POST',body,headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ctl.signal}).then(async r=>{clearTimeout(t);if(!r.ok)throw new Error('HTTP '+r.status);const j=await r.json();if(!(j&&j.elements&&j.elements.length))throw new Error('empty');return j;});}
+function render(els,cached){let nB=0;els.forEach(el=>{const t=el.tags||{};if(t.building){addBuilding(el);nB++;}else if(t.highway)addRoad(el);});
   if(!nB){showErr('0 buildings returned');return;}
-  status.innerHTML='✓ <b>'+nB+'</b> real buildings — Castleberry Hill';setTimeout(()=>{status.style.transition='opacity .6s';status.style.opacity='0';},2400);
+  status.innerHTML='✓ <b>'+nB+'</b> real buildings'+(cached?' · cached':' — Castleberry Hill');setTimeout(()=>{status.style.transition='opacity .6s';status.style.opacity='0';},2400);
   snapPlaces(); buildWorld();}
+async function load(){
+  try{const c=localStorage.getItem(CK);if(c){render(JSON.parse(c),true);return;}}catch(e){}   // instant from cache
+  status.innerHTML='Loading real map…';
+  const body='data='+encodeURIComponent(Q);
+  const tries=MIRRORS.map(u=>fetchT(u,body,20000));
+  let data=null;
+  try{ data=await (Promise.any?Promise.any(tries):Promise.race(tries)); }catch(e){}   // race all mirrors — first to answer wins
+  if(!data){showErr('map servers unreachable right now');return;}
+  try{localStorage.setItem(CK,JSON.stringify(data.elements));}catch(e){}
+  render(data.elements,false);}
 function snapPlaces(){PLACES.forEach(p=>{let best=null,bd=80;BUILDINGS.forEach(b=>{const d=Math.hypot(b.cx-p.x,b.cz-p.z);if(d<bd){bd=d;best=b;}});if(best){p.x=best.cx;p.z=best.cz;p.bh=best.h;}else p.bh=10;});}
 
 // ===== player =====
