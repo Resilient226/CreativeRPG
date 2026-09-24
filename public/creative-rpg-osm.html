@@ -137,10 +137,10 @@ const sunTex=(function(){const c=document.createElement('canvas');c.width=c.heig
 const sun=new T.Sprite(new T.SpriteMaterial({map:sunTex,fog:false,transparent:true,depthWrite:false})); sun.position.set(-300,380,-500); sun.scale.set(120,120,1); scene.add(sun);
 const stg=new T.BufferGeometry(),spp=[]; for(let i=0;i<220;i++){const th=Math.random()*6.28,ph=Math.random()*.48*Math.PI,r=1150;spp.push(Math.sin(ph)*Math.cos(th)*r,Math.cos(ph)*r,Math.sin(ph)*Math.sin(th)*r);} stg.setAttribute('position',new T.BufferAttribute(new Float32Array(spp),3));
 const stars=new T.Points(stg,new T.PointsMaterial({color:0xffffff,size:3,fog:false,transparent:true,opacity:0})); scene.add(stars);
-const PHASES=[{i:'☀️',s:'Day',bg:0xCDE7F7,fog:0xCDE7F7,he:1.0,hg:0xBFD8EF,d:.85,dc:0xffffff,fn:180,ff:520,st:'#6FB7EE',sh:'#CFE8F8',su:0xFFF6C8,ss:110,star:0},
-{i:'🌆',s:'Dusk',bg:0xEEB98C,fog:0xEEB98C,he:.72,hg:0xE0A98F,d:.62,dc:0xFFAE73,fn:150,ff:460,st:'#46356E',sh:'#F4A868',su:0xFF8A44,ss:150,star:.14},
-{i:'🌙',s:'Night',bg:0x182746,fog:0x182746,he:.42,hg:0x223058,d:.28,dc:0x9FB4E0,fn:120,ff:380,st:'#070E24',sh:'#1B2A4C',su:0xEAF0FF,ss:80,star:.9},
-{i:'🌅',s:'Dawn',bg:0xF0C8D8,fog:0xF0C8D8,he:.76,hg:0xD9B7D0,d:.6,dc:0xFFC6D6,fn:150,ff:460,st:'#5A4A8E',sh:'#F4C9D6',su:0xFFD3A6,ss:120,star:.18}];
+const PHASES=[{i:'☀️',s:'Day',bg:0xCDE7F7,fog:0xCDE7F7,he:1.0,hg:0xBFD8EF,d:.85,dc:0xffffff,fn:260,ff:1000,st:'#6FB7EE',sh:'#CFE8F8',su:0xFFF6C8,ss:110,star:0},
+{i:'🌆',s:'Dusk',bg:0xEEB98C,fog:0xEEB98C,he:.72,hg:0xE0A98F,d:.62,dc:0xFFAE73,fn:230,ff:900,st:'#46356E',sh:'#F4A868',su:0xFF8A44,ss:150,star:.14},
+{i:'🌙',s:'Night',bg:0x182746,fog:0x182746,he:.42,hg:0x223058,d:.28,dc:0x9FB4E0,fn:190,ff:720,st:'#070E24',sh:'#1B2A4C',su:0xEAF0FF,ss:80,star:.9},
+{i:'🌅',s:'Dawn',bg:0xF0C8D8,fog:0xF0C8D8,he:.76,hg:0xD9B7D0,d:.6,dc:0xFFC6D6,fn:230,ff:900,st:'#5A4A8E',sh:'#F4C9D6',su:0xFFD3A6,ss:120,star:.18}];
 let ph=0;
 function applyPhase(k){ph=(k%4+4)%4;const p=PHASES[ph];scene.background.setHex(p.bg);scene.fog.color.setHex(p.fog);scene.fog.near=p.fn;scene.fog.far=p.ff;hemi.intensity=p.he;hemi.groundColor.setHex(p.hg);dir.intensity=p.d;dir.color.setHex(p.dc);skyMat.map=skyTex(p.st,p.sh);skyMat.needsUpdate=true;sun.material.color.setHex(p.su);sun.scale.set(p.ss,p.ss,1);stars.material.opacity=p.star;document.getElementById('wxicon').textContent=p.i;document.getElementById('wtemp').textContent=p.s;}
 (function(){const h=new Date().getHours();applyPhase(h>=7&&h<17?0:h>=17&&h<20?1:(h>=20||h<6)?2:3);})();
@@ -175,20 +175,27 @@ PLACES.forEach(p=>{p.x=toX(p.lng);p.z=toZ(p.lat);});
 // ===== OSM buildings/roads =====
 const PAL=[0xF3B8C6,0xF7D9A0,0xBFE3C9,0xB8D6F2,0xE0C3F0,0xF6C7A8,0xC8ECE4,0xEAD9B0,0xD6C3EE,0xF2C8DE];
 const hh=s=>{let h=0;for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return h;};
-const BOXES=[], BUILDINGS=[]; const PR=1.6;
+const BOXES=[], BUILDINGS=[]; const PR=1.6; const labeledRoads=new Set();
 function collides(x,z){for(let i=0;i<BOXES.length;i++){const b=BOXES[i];if(Math.abs(x-b.x)<b.hw+PR&&Math.abs(z-b.z)<b.hd+PR)return true;}return false;}
 function bHeight(t){if(t){if(t.height){const h=parseFloat(t.height);if(!isNaN(h))return Math.max(3,h);}if(t['building:levels']){const l=parseFloat(t['building:levels']);if(!isNaN(l))return Math.max(3,l*3.3);}}return 6+Math.random()*8;}
 function addBuilding(el){const g=el.geometry;if(!g||g.length<3)return;const shape=new T.Shape();let minx=1e9,maxx=-1e9,minz=1e9,maxz=-1e9;
   g.forEach((pt,i)=>{const x=toX(pt.lon),z=toZ(pt.lat);if(i===0)shape.moveTo(x,z);else shape.lineTo(x,z);minx=Math.min(minx,x);maxx=Math.max(maxx,x);minz=Math.min(minz,z);maxz=Math.max(maxz,z);});
-  const h=bHeight(el.tags);let geo;try{geo=new T.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false,steps:1});}catch(e){return;}geo.rotateX(-Math.PI/2);
+  let h=Math.min(bHeight(el.tags),4);let geo;try{geo=new T.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false,steps:1});}catch(e){return;}geo.rotateX(-Math.PI/2);   // unimportant buildings kept short/flat
   const m=new T.Mesh(geo,new T.MeshStandardMaterial({color:PAL[hh(String(el.id))%PAL.length],roughness:.92,flatShading:true}));m.castShadow=true;m.receiveShadow=true;scene.add(m);
-  const cx=(minx+maxx)/2,cz=(minz+maxz)/2; BOXES.push({x:cx,z:cz,hw:(maxx-minx)/2,hd:(maxz-minz)/2}); BUILDINGS.push({cx,cz,h});}
+  const cx=(minx+maxx)/2,cz=(minz+maxz)/2; BOXES.push({x:cx,z:cz,hw:(maxx-minx)/2,hd:(maxz-minz)/2}); BUILDINGS.push({cx,cz,h,mesh:m});}
 // roads as real flat ribbons, width by type
 function roadWidth(t){const h=t.highway||'';if(/motorway|trunk|primary/.test(h))return 9;if(/secondary|tertiary/.test(h))return 7;if(/residential|unclassified|living_street/.test(h))return 5.5;if(/service/.test(h))return 3.8;if(/foot|path|pedestrian|cycleway|steps/.test(h))return 2.2;return 4.5;}
 function ribbon(pts,w,y,color){const verts=[],idx=[];for(let i=0;i<pts.length;i++){const p=pts[i],a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)];let dx=b.x-a.x,dz=b.z-a.z;const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;const nx=-dz,nz=dx;verts.push(p.x+nx*w,y,p.z+nz*w, p.x-nx*w,y,p.z-nz*w);}for(let i=0;i<pts.length-1;i++){const a=i*2;idx.push(a,a+1,a+2, a+1,a+3,a+2);}const geo=new T.BufferGeometry();geo.setAttribute('position',new T.BufferAttribute(new Float32Array(verts),3));geo.setIndex(idx);geo.computeVertexNormals();const m=new T.Mesh(geo,new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide}));m.receiveShadow=true;scene.add(m);}
 function addRoad(el){const g=el.geometry;if(!g||g.length<2)return;const rw=roadWidth(el.tags)/2;const pts=g.map(pt=>({x:toX(pt.lon),z:toZ(pt.lat)}));
   ribbon(pts,rw+2.6,0.05,0xF1ECE3);   // cream sidewalk / curb buffer
-  ribbon(pts,rw,0.08,0x888E9A);}       // asphalt on top
+  ribbon(pts,rw,0.08,0x888E9A);        // asphalt on top
+  if(el.tags&&el.tags.name)roadLabel(el.tags.name,pts);}
+function roadLabel(name,pts){if(labeledRoads.has(name))return;let len=0;for(let i=1;i<pts.length;i++)len+=Math.hypot(pts[i].x-pts[i-1].x,pts[i].z-pts[i-1].z);if(len<28)return;labeledRoads.add(name);
+  const i=Math.floor(pts.length/2),a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)],mid=pts[i],dx=b.x-a.x,dz=b.z-a.z;
+  const c=document.createElement('canvas');c.width=256;c.height=48;const gx=c.getContext('2d');gx.font='700 26px Poppins,sans-serif';gx.textAlign='center';gx.textBaseline='middle';gx.fillStyle='rgba(64,64,70,0.92)';gx.fillText(name,128,24);
+  const geo=new T.PlaneGeometry(Math.min(46,name.length*1.7+4),Math.min(46,name.length*1.7+4)*48/256);
+  const m=new T.Mesh(geo,new T.MeshBasicMaterial({map:new T.CanvasTexture(c),transparent:true,depthWrite:false}));m.rotation.x=-Math.PI/2;
+  const grp=new T.Group();grp.position.set(mid.x,0.16,mid.z);grp.rotation.y=Math.atan2(-dz,dx);grp.add(m);scene.add(grp);}
 // green areas (parks, grass, woods) as flat filled polygons + scattered trees
 function addGreen(el){const g=el.geometry;if(!g||g.length<3)return;const shape=new T.Shape();g.forEach((pt,i)=>{const x=toX(pt.lon),z=toZ(pt.lat);if(i===0)shape.moveTo(x,z);else shape.lineTo(x,z);});
   let geo;try{geo=new T.ShapeGeometry(shape);}catch(e){return;}geo.rotateX(-Math.PI/2);geo.translate(0,0.035,0);
@@ -228,7 +235,8 @@ async function load(){
   if(!data){showErr('map servers unreachable right now');return;}
   try{localStorage.setItem(CK,JSON.stringify(data.elements));}catch(e){}
   render(data.elements,false);}
-function snapPlaces(){PLACES.forEach(p=>{let best=null,bd=80;BUILDINGS.forEach(b=>{const d=Math.hypot(b.cx-p.x,b.cz-p.z);if(d<bd){bd=d;best=b;}});if(best){p.x=best.cx;p.z=best.cz;p.bh=best.h;}else p.bh=10;});}
+function snapPlaces(){PLACES.forEach(p=>{let best=null,bd=80;BUILDINGS.forEach(b=>{const d=Math.hypot(b.cx-p.x,b.cz-p.z);if(d<bd){bd=d;best=b;}});
+  if(best){p.x=best.cx;p.z=best.cz;if(best.mesh){best.mesh.scale.y=3.6;best.mesh.material.color.setHex(p.color);}p.bh=best.h*3.6;}else p.bh=12;});}   // important place buildings grow tall + take the place color
 
 // ===== player =====
 const player=new T.Group();
@@ -236,10 +244,11 @@ const torso=new T.Mesh(new T.CylinderGeometry(.7,.9,2.0,14),new T.MeshStandardMa
 const head=new T.Mesh(new T.SphereGeometry(.8,20,20),new T.MeshStandardMaterial({color:0x2A2140,roughness:.5}));head.position.y=3.3;head.castShadow=true;player.add(head);
 [-0.3,0.3].forEach(x=>{const e=new T.Mesh(new T.SphereGeometry(.15,10,10),new T.MeshStandardMaterial({color:0xffffff}));e.position.set(x,3.4,.66);player.add(e);});
 const pRing=new T.Mesh(new T.RingGeometry(1.9,2.5,32),new T.MeshBasicMaterial({color:0xC77DFF,transparent:true,opacity:.6,side:T.DoubleSide}));pRing.rotation.x=-Math.PI/2;pRing.position.y=.06;player.add(pRing);
+player.scale.setScalar(1.9);   // big, prominent avatar like Pokémon GO
 scene.add(player);
 
 const St={xp:0,level:1,streak:1,quest:0,discovered:{}}; const xpNext=l=>60+(l-1)*40;
-let faceYaw=0,camYaw=0,camDist=17,autoTarget=null; const joyV={x:0,y:0};
+let faceYaw=0,camYaw=0,camDist=26,camPitch=1.05,autoTarget=null; const joyV={x:0,y:0};
 const beacons=[]; const arrowGeo=new T.ConeGeometry(.7,1.5,4);arrowGeo.rotateX(Math.PI/2);
 const arrows=[];for(let k=0;k<8;k++){const a=new T.Mesh(arrowGeo,new T.MeshBasicMaterial({color:0xC77DFF,transparent:true,opacity:.8}));a.visible=false;scene.add(a);arrows.push(a);}
 
@@ -251,7 +260,7 @@ function catIcon(b,sz){sz=sz||20;const s='width="'+sz+'" height="'+sz+'"';if(b==
 function buildWorld(){
   // spawn player near the first place, nudged to open ground
   let sx=PLACES[0].x, sz=PLACES[0].z+22; let tries=0; while(collides(sx,sz)&&tries<40){sz+=4;tries++;} player.position.set(sx,0,sz);
-  camera.position.set(sx,18,sz+17); camera.lookAt(sx,1.5,sz);
+  camera.position.set(sx,27,sz+26); camera.lookAt(sx,1.5,sz);
   PLACES.forEach(p=>{
     const top=(p.bh||10);
     const beam=new T.Mesh(new T.CylinderGeometry(.6,.6,top+30,12,1,true),new T.MeshBasicMaterial({color:p.color,transparent:true,opacity:.32,side:T.DoubleSide,depthWrite:false,blending:T.AdditiveBlending}));beam.position.set(p.x,(top+30)/2,p.z);scene.add(beam);
@@ -274,10 +283,16 @@ function jm(e){if(e.pointerId!==jid)return;const r=joy.getBoundingClientRect();l
 function je(e){if(e.pointerId!==jid)return;jid=null;joyV.x=joyV.y=0;knob.style.transform='translate(0,0)';}
 const keys={};addEventListener('keydown',e=>keys[e.key.toLowerCase()]=true);addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 const ray=new T.Raycaster(),ndc=new T.Vector2();
-canvas.addEventListener('pointerdown',e=>{ndc.x=(e.clientX/innerWidth)*2-1;ndc.y=-(e.clientY/innerHeight)*2+1;ray.setFromCamera(ndc,camera);
-  const hit=ray.intersectObjects(PLACES.filter(p=>p.beacon).map(p=>p.beacon.disc));if(hit.length){const p=PLACES.find(q=>q.beacon&&q.beacon.disc===hit[0].object);if(p){if(St.discovered[p.id])openSheet(p);else autoTarget={x:p.x,z:p.z};}}});
-document.getElementById('zin').onclick=()=>camDist=Math.max(10,camDist-3);
-document.getElementById('zout').onclick=()=>camDist=Math.min(40,camDist+3);
+// drag to rotate/tilt the camera; a tap (no drag) selects a place
+let camDrag=null;
+canvas.addEventListener('pointerdown',e=>{camDrag={x:e.clientX,y:e.clientY,moved:false};});
+canvas.addEventListener('pointermove',e=>{if(!camDrag)return;const dx=e.clientX-camDrag.x,dy=e.clientY-camDrag.y;if(Math.abs(dx)+Math.abs(dy)>8)camDrag.moved=true;
+  if(camDrag.moved){camYaw-=dx*0.006;camPitch=Math.max(0.5,Math.min(1.7,camPitch-dy*0.005));camDrag.x=e.clientX;camDrag.y=e.clientY;}});
+canvas.addEventListener('pointerup',e=>{const d=camDrag;camDrag=null;if(d&&!d.moved){ndc.x=(e.clientX/innerWidth)*2-1;ndc.y=-(e.clientY/innerHeight)*2+1;ray.setFromCamera(ndc,camera);
+  const hit=ray.intersectObjects(PLACES.filter(p=>p.beacon).map(p=>p.beacon.disc));if(hit.length){const p=PLACES.find(q=>q.beacon&&q.beacon.disc===hit[0].object);if(p){if(St.discovered[p.id])openSheet(p);else autoTarget={x:p.x,z:p.z};}}}});
+canvas.addEventListener('pointercancel',()=>{camDrag=null;});
+document.getElementById('zin').onclick=()=>camDist=Math.max(12,camDist-4);
+document.getElementById('zout').onclick=()=>camDist=Math.min(70,camDist+4);
 document.getElementById('hintGo').onclick=()=>document.getElementById('hint').classList.remove('show');
 
 const clock=new T.Clock();let tt=0;
@@ -288,8 +303,7 @@ function frame(){const dt=Math.min(clock.getDelta(),.05);tt+=dt;
   if(!moving&&(Math.abs(mx)>.02||Math.abs(mz)>.02)){const cf=camYaw,fx=Math.sin(cf),fz=Math.cos(cf),rx=-Math.cos(cf),rz=Math.sin(cf);let dxw=fx*(-mz)+rx*mx,dzw=fz*(-mz)+rz*mx;const l=Math.hypot(dxw,dzw)||1;dxw/=l;dzw/=l;mvx=dxw*13*dt;mvz=dzw*13*dt;faceYaw=Math.atan2(dxw,dzw);moving=true;}
   if(moving){const ox=player.position.x,oz=player.position.z;const nx=ox+mvx;if(!collides(nx,oz))player.position.x=nx;const nz=oz+mvz;if(!collides(player.position.x,nz))player.position.z=nz;if(autoTarget&&player.position.x===ox&&player.position.z===oz)autoTarget=null;}
   player.rotation.y=faceYaw;torso.position.y=1.8+(moving?Math.abs(Math.sin(tt*10))*.14:0);pRing.rotation.z+=dt*.9;pRing.material.opacity=.4+.25*Math.abs(Math.sin(tt*2));
-  if(moving)camYaw+=Math.atan2(Math.sin(faceYaw-camYaw),Math.cos(faceYaw-camYaw))*Math.min(1,dt*3);
-  const ch=camDist*1.05,cx=player.position.x-Math.sin(camYaw)*camDist,cz=player.position.z-Math.cos(camYaw)*camDist;
+  const ch=camDist*camPitch,cx=player.position.x-Math.sin(camYaw)*camDist,cz=player.position.z-Math.cos(camYaw)*camDist;
   camera.position.x+=(cx-camera.position.x)*Math.min(1,dt*6);camera.position.z+=(cz-camera.position.z)*Math.min(1,dt*6);camera.position.y+=(ch-camera.position.y)*Math.min(1,dt*6);camera.lookAt(player.position.x,1.5,player.position.z);
   // beacons + discovery
   PLACES.forEach(p=>{if(!p.beacon)return;const b=p.beacon,found=St.discovered[p.id];b.disc.rotation.z+=dt*.6;b.disc.material.opacity=.4+.2*Math.sin(tt*2+p.x);
