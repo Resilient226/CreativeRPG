@@ -184,12 +184,11 @@ function addBuilding(el){const g=el.geometry;if(!g||g.length<3)return;const shap
   const m=new T.Mesh(geo,new T.MeshStandardMaterial({color:PAL[hh(String(el.id))%PAL.length],roughness:.92,flatShading:true}));m.castShadow=true;m.receiveShadow=true;scene.add(m);
   const cx=(minx+maxx)/2,cz=(minz+maxz)/2; BOXES.push({x:cx,z:cz,hw:(maxx-minx)/2,hd:(maxz-minz)/2}); BUILDINGS.push({cx,cz,h});}
 // roads as real flat ribbons, width by type
-function roadWidth(t){const h=t.highway||'';if(/motorway|trunk|primary/.test(h))return 11;if(/secondary|tertiary/.test(h))return 8;if(/residential|unclassified|living_street/.test(h))return 6.5;if(/service/.test(h))return 4.5;if(/foot|path|pedestrian|cycleway|steps/.test(h))return 2.4;return 5.5;}
-function addRoad(el){const g=el.geometry;if(!g||g.length<2)return;const w=roadWidth(el.tags)/2;const pts=g.map(pt=>({x:toX(pt.lon),z:toZ(pt.lat)}));
-  const verts=[],idx=[];for(let i=0;i<pts.length;i++){const p=pts[i],a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)];let dx=b.x-a.x,dz=b.z-a.z;const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;const nx=-dz,nz=dx;verts.push(p.x+nx*w,0.07,p.z+nz*w, p.x-nx*w,0.07,p.z-nz*w);}
-  for(let i=0;i<pts.length-1;i++){const a=i*2;idx.push(a,a+1,a+2, a+1,a+3,a+2);}
-  const geo=new T.BufferGeometry();geo.setAttribute('position',new T.BufferAttribute(new Float32Array(verts),3));geo.setIndex(idx);geo.computeVertexNormals();
-  const m=new T.Mesh(geo,new T.MeshStandardMaterial({color:0x888E9A,roughness:1,side:T.DoubleSide}));m.receiveShadow=true;scene.add(m);}
+function roadWidth(t){const h=t.highway||'';if(/motorway|trunk|primary/.test(h))return 9;if(/secondary|tertiary/.test(h))return 7;if(/residential|unclassified|living_street/.test(h))return 5.5;if(/service/.test(h))return 3.8;if(/foot|path|pedestrian|cycleway|steps/.test(h))return 2.2;return 4.5;}
+function ribbon(pts,w,y,color){const verts=[],idx=[];for(let i=0;i<pts.length;i++){const p=pts[i],a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)];let dx=b.x-a.x,dz=b.z-a.z;const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;const nx=-dz,nz=dx;verts.push(p.x+nx*w,y,p.z+nz*w, p.x-nx*w,y,p.z-nz*w);}for(let i=0;i<pts.length-1;i++){const a=i*2;idx.push(a,a+1,a+2, a+1,a+3,a+2);}const geo=new T.BufferGeometry();geo.setAttribute('position',new T.BufferAttribute(new Float32Array(verts),3));geo.setIndex(idx);geo.computeVertexNormals();const m=new T.Mesh(geo,new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide}));m.receiveShadow=true;scene.add(m);}
+function addRoad(el){const g=el.geometry;if(!g||g.length<2)return;const rw=roadWidth(el.tags)/2;const pts=g.map(pt=>({x:toX(pt.lon),z:toZ(pt.lat)}));
+  ribbon(pts,rw+2.6,0.05,0xF1ECE3);   // cream sidewalk / curb buffer
+  ribbon(pts,rw,0.08,0x888E9A);}       // asphalt on top
 // green areas (parks, grass, woods) as flat filled polygons + scattered trees
 function addGreen(el){const g=el.geometry;if(!g||g.length<3)return;const shape=new T.Shape();g.forEach((pt,i)=>{const x=toX(pt.lon),z=toZ(pt.lat);if(i===0)shape.moveTo(x,z);else shape.lineTo(x,z);});
   let geo;try{geo=new T.ShapeGeometry(shape);}catch(e){return;}geo.rotateX(-Math.PI/2);geo.translate(0,0.035,0);
@@ -240,7 +239,7 @@ const pRing=new T.Mesh(new T.RingGeometry(1.9,2.5,32),new T.MeshBasicMaterial({c
 scene.add(player);
 
 const St={xp:0,level:1,streak:1,quest:0,discovered:{}}; const xpNext=l=>60+(l-1)*40;
-let faceYaw=0,camYaw=0,camDist=16,autoTarget=null; const joyV={x:0,y:0};
+let faceYaw=0,camYaw=0,camDist=17,autoTarget=null; const joyV={x:0,y:0};
 const beacons=[]; const arrowGeo=new T.ConeGeometry(.7,1.5,4);arrowGeo.rotateX(Math.PI/2);
 const arrows=[];for(let k=0;k<8;k++){const a=new T.Mesh(arrowGeo,new T.MeshBasicMaterial({color:0xC77DFF,transparent:true,opacity:.8}));a.visible=false;scene.add(a);arrows.push(a);}
 
@@ -252,7 +251,7 @@ function catIcon(b,sz){sz=sz||20;const s='width="'+sz+'" height="'+sz+'"';if(b==
 function buildWorld(){
   // spawn player near the first place, nudged to open ground
   let sx=PLACES[0].x, sz=PLACES[0].z+22; let tries=0; while(collides(sx,sz)&&tries<40){sz+=4;tries++;} player.position.set(sx,0,sz);
-  camera.position.set(sx,12,sz+16); camera.lookAt(sx,3,sz);
+  camera.position.set(sx,18,sz+17); camera.lookAt(sx,1.5,sz);
   PLACES.forEach(p=>{
     const top=(p.bh||10);
     const beam=new T.Mesh(new T.CylinderGeometry(.6,.6,top+30,12,1,true),new T.MeshBasicMaterial({color:p.color,transparent:true,opacity:.32,side:T.DoubleSide,depthWrite:false,blending:T.AdditiveBlending}));beam.position.set(p.x,(top+30)/2,p.z);scene.add(beam);
@@ -290,8 +289,8 @@ function frame(){const dt=Math.min(clock.getDelta(),.05);tt+=dt;
   if(moving){const ox=player.position.x,oz=player.position.z;const nx=ox+mvx;if(!collides(nx,oz))player.position.x=nx;const nz=oz+mvz;if(!collides(player.position.x,nz))player.position.z=nz;if(autoTarget&&player.position.x===ox&&player.position.z===oz)autoTarget=null;}
   player.rotation.y=faceYaw;torso.position.y=1.8+(moving?Math.abs(Math.sin(tt*10))*.14:0);pRing.rotation.z+=dt*.9;pRing.material.opacity=.4+.25*Math.abs(Math.sin(tt*2));
   if(moving)camYaw+=Math.atan2(Math.sin(faceYaw-camYaw),Math.cos(faceYaw-camYaw))*Math.min(1,dt*3);
-  const ch=camDist*.55,cx=player.position.x-Math.sin(camYaw)*camDist,cz=player.position.z-Math.cos(camYaw)*camDist;
-  camera.position.x+=(cx-camera.position.x)*Math.min(1,dt*6);camera.position.z+=(cz-camera.position.z)*Math.min(1,dt*6);camera.position.y+=(ch-camera.position.y)*Math.min(1,dt*6);camera.lookAt(player.position.x,4,player.position.z);
+  const ch=camDist*1.05,cx=player.position.x-Math.sin(camYaw)*camDist,cz=player.position.z-Math.cos(camYaw)*camDist;
+  camera.position.x+=(cx-camera.position.x)*Math.min(1,dt*6);camera.position.z+=(cz-camera.position.z)*Math.min(1,dt*6);camera.position.y+=(ch-camera.position.y)*Math.min(1,dt*6);camera.lookAt(player.position.x,1.5,player.position.z);
   // beacons + discovery
   PLACES.forEach(p=>{if(!p.beacon)return;const b=p.beacon,found=St.discovered[p.id];b.disc.rotation.z+=dt*.6;b.disc.material.opacity=.4+.2*Math.sin(tt*2+p.x);
     if(p.muralMesh){p.muralMesh.lookAt(camera.position.x,p.muralMesh.position.y,camera.position.z);}
