@@ -184,11 +184,21 @@ function addBuilding(el){const g=el.geometry;if(!g||g.length<3)return;const shap
   const m=new T.Mesh(geo,new T.MeshStandardMaterial({color:PAL[hh(String(el.id))%PAL.length],roughness:.92,flatShading:true}));m.castShadow=true;m.receiveShadow=true;scene.add(m);
   const cx=(minx+maxx)/2,cz=(minz+maxz)/2; BOXES.push({x:cx,z:cz,hw:(maxx-minx)/2,hd:(maxz-minz)/2}); BUILDINGS.push({cx,cz,h,mesh:m});}
 // roads as real flat ribbons, width by type
-function roadWidth(t){const h=t.highway||'';if(/motorway|trunk|primary/.test(h))return 9;if(/secondary|tertiary/.test(h))return 7;if(/residential|unclassified|living_street/.test(h))return 5.5;if(/service/.test(h))return 3.8;if(/foot|path|pedestrian|cycleway|steps/.test(h))return 2.2;return 4.5;}
-function ribbon(pts,w,y,color){const verts=[],idx=[];for(let i=0;i<pts.length;i++){const p=pts[i],a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)];let dx=b.x-a.x,dz=b.z-a.z;const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;const nx=-dz,nz=dx;verts.push(p.x+nx*w,y,p.z+nz*w, p.x-nx*w,y,p.z-nz*w);}for(let i=0;i<pts.length-1;i++){const a=i*2;idx.push(a,a+1,a+2, a+1,a+3,a+2);}const geo=new T.BufferGeometry();geo.setAttribute('position',new T.BufferAttribute(new Float32Array(verts),3));geo.setIndex(idx);geo.computeVertexNormals();const m=new T.Mesh(geo,new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide}));m.receiveShadow=true;scene.add(m);}
+// real width from OSM tags where present, else realistic defaults by type
+function roadWidth(t){t=t||{};
+  if(t.width){const w=parseFloat(t.width);if(!isNaN(w)&&w>0)return Math.max(2,w);}
+  if(t.est_width){const w=parseFloat(t.est_width);if(!isNaN(w)&&w>0)return Math.max(2,w);}
+  if(t.lanes){const l=parseFloat(t.lanes);if(!isNaN(l)&&l>0)return Math.max(2.5,l*3.2+1);}
+  const h=t.highway||'';
+  if(/motorway|trunk/.test(h))return 12; if(/primary/.test(h))return 9.5; if(/secondary/.test(h))return 8; if(/tertiary/.test(h))return 7;
+  if(/residential|unclassified|living_street/.test(h))return 5.5; if(/service/.test(h))return 3.5; if(/foot|path|pedestrian|cycleway|steps|track/.test(h))return 2; return 4.5;}
+// clip road edges out of building footprints so a road never draws under a building
+function inBoxes(x,z){for(let i=0;i<BOXES.length;i++){const b=BOXES[i];if(Math.abs(x-b.x)<b.hw&&Math.abs(z-b.z)<b.hd)return true;}return false;}
+function clampW(cx,cz,nx,nz,w){if(!inBoxes(cx+nx*w,cz+nz*w))return w;let lo=0,hi=w;for(let k=0;k<7;k++){const m=(lo+hi)/2;if(inBoxes(cx+nx*m,cz+nz*m))hi=m;else lo=m;}return lo;}
+function ribbon(pts,w,y,color,clip){const verts=[],idx=[];for(let i=0;i<pts.length;i++){const p=pts[i],a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)];let dx=b.x-a.x,dz=b.z-a.z;const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;const nx=-dz,nz=dx;let wl=w,wr=w;if(clip){wl=clampW(p.x,p.z,nx,nz,w);wr=clampW(p.x,p.z,-nx,-nz,w);}verts.push(p.x+nx*wl,y,p.z+nz*wl, p.x-nx*wr,y,p.z-nz*wr);}for(let i=0;i<pts.length-1;i++){const a=i*2;idx.push(a,a+1,a+2, a+1,a+3,a+2);}const geo=new T.BufferGeometry();geo.setAttribute('position',new T.BufferAttribute(new Float32Array(verts),3));geo.setIndex(idx);geo.computeVertexNormals();const m=new T.Mesh(geo,new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide}));m.receiveShadow=true;scene.add(m);}
 function addRoad(el){const g=el.geometry;if(!g||g.length<2)return;const rw=roadWidth(el.tags)/2;const pts=g.map(pt=>({x:toX(pt.lon),z:toZ(pt.lat)}));
-  ribbon(pts,rw+2.6,0.05,0xF1ECE3);   // cream sidewalk / curb buffer
-  ribbon(pts,rw,0.08,0x888E9A);        // asphalt on top
+  ribbon(pts,rw+1.6,0.05,0xF1ECE3,true);   // clipped sidewalk / curb
+  ribbon(pts,rw,0.08,0x888E9A,true);         // clipped asphalt
   if(el.tags&&el.tags.name)roadLabel(el.tags.name,pts);}
 function roadLabel(name,pts){if(labeledRoads.has(name))return;let len=0;for(let i=1;i<pts.length;i++)len+=Math.hypot(pts[i].x-pts[i-1].x,pts[i].z-pts[i-1].z);if(len<28)return;labeledRoads.add(name);
   const i=Math.floor(pts.length/2),a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)],mid=pts[i],dx=b.x-a.x,dz=b.z-a.z;
@@ -217,10 +227,10 @@ document.getElementById('err').onclick=()=>location.reload();
 function fetchT(url,body,ms){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),ms);
   return fetch(url,{method:'POST',body,headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ctl.signal}).then(async r=>{clearTimeout(t);if(!r.ok)throw new Error('HTTP '+r.status);const j=await r.json();if(!(j&&j.elements&&j.elements.length))throw new Error('empty');return j;});}
 function render(els,cached){let nB=0;
-  // greenery first (under roads/buildings), then roads, then buildings, then trees
+  // greenery first, then BUILDINGS (populate footprints), then roads (which clip to those footprints), then trees
   els.forEach(el=>{const t=el.tags||{};if(t.leisure==='park'||(t.landuse&&/grass|forest|meadow|recreation|greenfield|village_green|cemetery/.test(t.landuse))||(t.natural&&/wood|scrub|grassland/.test(t.natural)))addGreen(el);});
-  els.forEach(el=>{const t=el.tags||{};if(t.highway&&!t.building)addRoad(el);});
   els.forEach(el=>{const t=el.tags||{};if(t.building){addBuilding(el);nB++;}});
+  els.forEach(el=>{const t=el.tags||{};if(t.highway&&!t.building)addRoad(el);});
   els.forEach(el=>{const t=el.tags||{};if(t.natural==='tree'&&el.lat!=null)addTreeAt(toX(el.lon),toZ(el.lat));else if(t.natural==='tree_row')addTreeRow(el);});
   if(!nB){showErr('0 buildings returned');return;}
   status.innerHTML='✓ <b>'+nB+'</b> real buildings'+(cached?' · cached':' — Castleberry Hill');setTimeout(()=>{status.style.transition='opacity .6s';status.style.opacity='0';},2400);
@@ -287,7 +297,7 @@ const ray=new T.Raycaster(),ndc=new T.Vector2();
 let camDrag=null;
 canvas.addEventListener('pointerdown',e=>{camDrag={x:e.clientX,y:e.clientY,moved:false};});
 canvas.addEventListener('pointermove',e=>{if(!camDrag)return;const dx=e.clientX-camDrag.x,dy=e.clientY-camDrag.y;if(Math.abs(dx)+Math.abs(dy)>8)camDrag.moved=true;
-  if(camDrag.moved){camYaw-=dx*0.006;camPitch=Math.max(0.5,Math.min(1.7,camPitch-dy*0.005));camDrag.x=e.clientX;camDrag.y=e.clientY;}});
+  if(camDrag.moved){camYaw-=dx*0.006;camPitch=Math.max(0.85,Math.min(1.6,camPitch-dy*0.004));camDrag.x=e.clientX;camDrag.y=e.clientY;}});
 canvas.addEventListener('pointerup',e=>{const d=camDrag;camDrag=null;if(d&&!d.moved){ndc.x=(e.clientX/innerWidth)*2-1;ndc.y=-(e.clientY/innerHeight)*2+1;ray.setFromCamera(ndc,camera);
   const hit=ray.intersectObjects(PLACES.filter(p=>p.beacon).map(p=>p.beacon.disc));if(hit.length){const p=PLACES.find(q=>q.beacon&&q.beacon.disc===hit[0].object);if(p){if(St.discovered[p.id])openSheet(p);else autoTarget={x:p.x,z:p.z};}}}});
 canvas.addEventListener('pointercancel',()=>{camDrag=null;});
